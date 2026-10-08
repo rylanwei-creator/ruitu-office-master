@@ -7,7 +7,7 @@ struct AboutSettingsView: View {
     private let buildNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "2"
     private let developer = "锐途工作室"
     private let copyright = "Copyright © 2026 锐途工作室. All rights reserved."
-    private let updateURL = "https://github.com/wjr22917/RuiTuOfficeMaster/releases"
+    private let updateURL = "https://github.com/rylanwei-creator/ruitu-office-master/releases/latest"
 
     @State private var isCheckingUpdate = false
     @State private var updateToast: UpdateToast?
@@ -88,7 +88,7 @@ struct AboutSettingsView: View {
                         .disabled(isCheckingUpdate)
                     }
 
-                    Text("点击检查更新将打开浏览器查看最新版本发布页")
+                    Text("点击“查看发布页”，在浏览器中查看 GitHub 最新版本与下载")
                         .font(.system(size: 11))
                         .foregroundColor(AppColors.textSecondary.opacity(0.7))
                         .padding(.top, 4)
@@ -130,16 +130,20 @@ struct AboutSettingsView: View {
         isCheckingUpdate = true
         updateToast = nil
 
-        // 尝试访问更新页，检测网络可达性
+        // 交给默认浏览器打开 GitHub 最新发布页。
         guard let url = URL(string: updateURL) else {
             isCheckingUpdate = false
             showUpdateToast(.failure, "更新地址配置错误")
             return
         }
 
-        NSWorkspace.shared.open(url)
+        let opened = NSWorkspace.shared.open(url)
         isCheckingUpdate = false
-        showUpdateToast(.success, "已打开版本发布页")
+        if opened {
+            showUpdateToast(.success, "已打开 GitHub 最新发布页")
+        } else {
+            showUpdateToast(.failure, "无法打开浏览器，请稍后重试")
+        }
     }
 
     private func showUpdateToast(_ type: UpdateToastType, _ text: String) {

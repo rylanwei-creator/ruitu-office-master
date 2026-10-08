@@ -38,6 +38,9 @@ struct ContentView: View {
                 OCRView()
                     .pageVisible(selectedNav == .ocr)
 
+                TaskCenterView()
+                    .pageVisible(selectedNav == .tasks)
+
                 HistoryView()
                     .pageVisible(selectedNav == .history)
 

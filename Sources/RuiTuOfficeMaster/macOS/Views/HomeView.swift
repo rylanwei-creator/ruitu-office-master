@@ -1,77 +1,91 @@
 #if os(macOS)
 import SwiftUI
 
-/// 首页 — 功能卡片总览
 struct HomeView: View {
     @Binding var selectedNav: NavItem
-
-    /// 卡片数据（工具类）
-    private let toolCards: [(NavItem, String)] = [
-        (.fileRename, "添加前缀/后缀、查找替换、序号命名"),
-        (.imageProcessing, "压缩图片、调整尺寸"),
-        (.formatConversion, "图片格式转换，输出格式按本机能力提供"),
-        (.idPhoto, "人像换底、规格裁切、大小控制与打印排版"),
-        (.pdfTools, "合并、拆分、加密、水印及基础文本转换"),
-        (.videoCompression, "压缩视频文件，调节质量与分辨率"),
-        (.mediaConversion, "本地语音转字幕、视频转 GIF 与 GIF 压缩"),
-        (.ocr, "从图片中提取文字，支持中英文等多语言，纯本地离线识别"),
-    ]
-
+    @State private var search = ""
+    @State private var recentTools: [NavItem] = []
+    @AppStorage("favoriteTools.v1") private var favoriteStorage = ""
+    private var favorites: Set<String> { Set(favoriteStorage.split(separator: "|").map(String.init)) }
+    private var filtered: [ToolCatalogEntry] { ToolCatalog.search(search) }
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
-                // 页面标题
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 12) {
-                        // Logo 图标
-                        if let logoPath = AppResources.bundle.path(forResource: "Logo", ofType: "png"),
-                           let nsImage = NSImage(contentsOfFile: logoPath) {
-                            Image(nsImage: nsImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 36, height: 36)
-                        }
-                        Text("锐途办公大师")
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundColor(AppColors.textPrimary)
-                    }
-                    Text("一站式文件批量处理，让办公更高效")
-                        .font(.system(size: 14))
-                        .foregroundColor(AppColors.textSecondary)
-                }
-                .padding(.top, 24)
-
-                // 功能卡片区域
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("全部工具")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(AppColors.textPrimary)
-
-                    LazyVGrid(
-                        columns: [
-                            GridItem(.adaptive(minimum: 180, maximum: 230), spacing: 16)
-                        ],
-                        spacing: 16
-                    ) {
-                        ForEach(toolCards, id: \.0.id) { item, description in
-                            FeatureCard(
-                                title: item.rawValue,
-                                description: description,
-                                systemImage: item.systemImage
-                            ) {
-                                selectedNav = item
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    PageHeader(title: "锐途办公大师", subtitle: "本机处理文件，快速找到你需要的工具")
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(AppColors.textSecondary)
+                        TextField("搜索工具，例如：压缩、证件照、PDF、字幕", text: $search).textFieldStyle(.plain)
+                        if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清空搜索") }
+                    }.padding(12).background(AppColors.cardBackground, in: RoundedRectangle(cornerRadius: 10))
+                    Button { selectedNav = .tasks } label: {
+                        HStack {
+                            Label("任务中心", systemImage: "list.bullet.clipboard")
+                            Spacer()
+                            Text(FileTaskManager.shared.activeCount > 0 ? "\(FileTaskManager.shared.activeCount) 个任务处理中或等待中" : "查看图片批处理进度与结果")
+                                .font(.callout).foregroundStyle(AppColors.textSecondary)
+                            Image(systemName: "chevron.right")
+                        }.padding(16).background(AppColors.cardBackground, in: RoundedRectangle(cornerRadius: 10))
+                    }.buttonStyle(.plain)
+                    if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        if !favorites.isEmpty { toolSection("收藏工具", entries: ToolCatalog.tools.filter { favorites.contains($0.id) }) }
+                        if !recentTools.isEmpty {
+                            HStack(spacing: 10) {
+                                Text("最近使用").font(.callout).foregroundStyle(AppColors.textSecondary)
+                                ForEach(recentTools) { item in Button(item.rawValue) { selectedNav = item }.buttonStyle(.bordered) }
                             }
                         }
                     }
+                    if filtered.isEmpty {
+                        Spacer(minLength: 0)
+                        ContentUnavailableView.search(text: search)
+                            .frame(maxWidth: .infinity)
+                        Spacer(minLength: 0)
+                    } else {
+                        toolSection(search.isEmpty ? "全部工具" : "搜索结果（\(filtered.count)）", entries: filtered)
+                    }
                 }
-
-                Spacer(minLength: 48)
+                .frame(minHeight: filtered.isEmpty ? max(0, geometry.size.height - 64) : nil, alignment: .top)
+                .padding(32)
+                .frame(maxWidth: 1000)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 32)
-            .frame(maxWidth: 900)
+        }.background(AppColors.background)
+        .onAppear(perform: loadRecent)
+        .onReceive(NotificationCenter.default.publisher(for: .historyDidChange)) { _ in loadRecent() }
+    }
+    private func toolSection(_ title: String, entries: [ToolCatalogEntry]) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title).font(.system(size: 20, weight: .semibold)).foregroundStyle(AppColors.textPrimary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 260), spacing: 16)], spacing: 16) {
+                ForEach(entries) { entry in
+                    VStack(spacing: 0) {
+                        FeatureCard(title: entry.item.rawValue, description: entry.description, systemImage: entry.item.systemImage) { selectedNav = entry.item }
+                        HStack {
+                            Spacer()
+                            Button { toggleFavorite(entry.id) } label: {
+                                Label(favorites.contains(entry.id) ? "已收藏" : "收藏", systemImage: favorites.contains(entry.id) ? "star.fill" : "star")
+                                    .font(.caption)
+                            }.buttonStyle(.plain).foregroundStyle(AppColors.primary).padding(.top, 8)
+                        }
+                    }
+                }
+            }
         }
-        .background(AppColors.background)
+    }
+    private func toggleFavorite(_ id: String) {
+        var values = favorites
+        if values.contains(id) { values.remove(id) } else { values.insert(id) }
+        favoriteStorage = values.sorted().joined(separator: "|")
+    }
+    private func loadRecent() {
+        var unique: [NavItem] = []
+        for record in HistoryService().fetchAll() {
+            guard let item = NavItem(rawValue: record.toolName), ToolCatalog.tools.contains(where: { $0.item == item }), !unique.contains(item) else { continue }
+            unique.append(item)
+            if unique.count == 3 { break }
+        }
+        recentTools = unique
     }
 }
-
 #endif

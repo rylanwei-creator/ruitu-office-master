@@ -6,6 +6,19 @@ enum RenameMode: String, CaseIterable, Sendable {
         switch self { case .prefix: return "textformat.abc"; case .suffix: return "textformat.abc.dottedunderline"; case .replace: return "arrow.triangle.swap"; case .numbering: return "list.number" }
     }
 }
+/// 用文件身份、大小和修改时间识别预览/撤销期间被替换或编辑的文件。
+struct RenameFileVersion: Sendable, Equatable {
+    let device: UInt64
+    let inode: UInt64
+    let size: UInt64
+    let modified: Date
+    static func read(_ url: URL) -> Self? {
+        guard let values = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let device = values[.systemNumber] as? NSNumber, let inode = values[.systemFileNumber] as? NSNumber,
+              let size = values[.size] as? NSNumber, let modified = values[.modificationDate] as? Date else { return nil }
+        return Self(device: device.uint64Value, inode: inode.uint64Value, size: size.uint64Value, modified: modified)
+    }
+}
 struct RenamePreviewItem: Identifiable, Sendable {
     let id = UUID()
     let originalURL: URL
@@ -13,10 +26,12 @@ struct RenamePreviewItem: Identifiable, Sendable {
     let newName: String
     let isValid: Bool
     var conflictReason: String? = nil
+    var sourceVersion: RenameFileVersion? = nil
 }
 struct RenameMove: Sendable {
     let original: URL
     let renamed: URL
+    var version: RenameFileVersion? = nil
 }
 enum RenameResult: Sendable {
     case success(moves: [RenameMove])
@@ -58,9 +73,11 @@ struct FileRenameService: Sendable {
                 findText: findText, replaceText: replaceText, numberText: numberText, number: number, numberDigits: numberDigits)
             var name = requested
             var reason: String?
+            let version = RenameFileVersion.read(url)
             let changed = requested != url.lastPathComponent
             if !validName(requested) || overflow { reason = "文件名无效或序号超出范围" }
             else if !fm.fileExists(atPath: url.path) { reason = "原文件已不存在" }
+            else if version == nil { reason = "无法读取原文件状态，请检查权限" }
             else if !fm.isWritableFile(atPath: url.deletingLastPathComponent().path) { reason = "所在文件夹没有写入权限" }
             else if changed {
                 // 编号避让在预览阶段完成，使预览与实际改名一致。
@@ -78,7 +95,7 @@ struct FileRenameService: Sendable {
                 }
             }
             return RenamePreviewItem(originalURL: url, originalName: url.lastPathComponent,
-                newName: name, isValid: changed && reason == nil, conflictReason: reason)
+                newName: name, isValid: changed && reason == nil, conflictReason: reason, sourceVersion: version)
         }
     }
     func execute(previewItems: [RenamePreviewItem], progressHandler: @escaping @Sendable (Double) -> Void) -> RenameResult {
@@ -90,6 +107,7 @@ struct FileRenameService: Sendable {
         for item in items {
             let dest = item.originalURL.deletingLastPathComponent().appendingPathComponent(item.newName)
             guard validName(item.newName), fm.fileExists(atPath: item.originalURL.path),
+                  item.sourceVersion == nil || RenameFileVersion.read(item.originalURL) == item.sourceVersion,
                   (!fm.fileExists(atPath: dest.path) || sameFile(dest, item.originalURL)), keys.insert(dest.path.lowercased()).inserted else {
                 return .failure(errors: ["文件状态已变化，请重新预览后再执行：\(item.originalName)"])
             }
@@ -98,6 +116,9 @@ struct FileRenameService: Sendable {
         var completed: [RenameMove] = []
         do {
             for item in items {
+                guard item.sourceVersion == nil || RenameFileVersion.read(item.originalURL) == item.sourceVersion else {
+                    throw CocoaError(.fileReadUnknown)
+                }
                 let temp = item.originalURL.deletingLastPathComponent().appendingPathComponent(".ruit-rename-\(UUID().uuidString)")
                 try fm.moveItem(at: item.originalURL, to: temp)
                 staged.append((item, temp))
@@ -105,7 +126,7 @@ struct FileRenameService: Sendable {
             for entry in staged {
                 let target = entry.item.originalURL.deletingLastPathComponent().appendingPathComponent(entry.item.newName)
                 try fm.moveItem(at: entry.temporary, to: target)
-                completed.append(RenameMove(original: entry.item.originalURL, renamed: target))
+                completed.append(RenameMove(original: entry.item.originalURL, renamed: target, version: RenameFileVersion.read(target)))
                 progressHandler(Double(completed.count) / Double(max(1, items.count)))
             }
             return .success(moves: completed)
@@ -125,7 +146,7 @@ struct FileRenameService: Sendable {
     func undo(_ moves: [RenameMove]) -> RenameResult {
         let items = moves.map {
             RenamePreviewItem(originalURL: $0.renamed, originalName: $0.renamed.lastPathComponent,
-                              newName: $0.original.lastPathComponent, isValid: true)
+                              newName: $0.original.lastPathComponent, isValid: true, sourceVersion: $0.version)
         }
         return execute(previewItems: items, progressHandler: { _ in })
     }

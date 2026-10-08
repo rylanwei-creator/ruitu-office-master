@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 // MARK: - 图片格式互转服务
 
 /// 支持的输出格式
-enum ConversionFormat: String, CaseIterable {
+enum ConversionFormat: String, CaseIterable, Sendable {
     case jpg = "JPG"
     case png = "PNG"
     case webp = "WebP"

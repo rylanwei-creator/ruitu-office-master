@@ -37,16 +37,20 @@ struct ImageProcessingView: View {
 
                 // 第一步：选择图片
                 imageSelectionSection
-                    .disabled(viewModel.isProcessing)
+                    .disabled(viewModel.isProcessing || viewModel.isSaving)
+
+                if viewModel.selectedImages.isEmpty, let message = viewModel.errorMessage {
+                    Label(message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(AppColors.error)
+                }
 
                 // 压缩设置
                 if !viewModel.selectedImages.isEmpty {
                     compressionConfigSection
-                        .disabled(viewModel.isProcessing)
+                        .disabled(viewModel.isProcessing || viewModel.isSaving || viewModel.isImporting)
 
                     // 格式转换
                     formatConversionSection
-                        .disabled(viewModel.isProcessing)
+                        .disabled(viewModel.isProcessing || viewModel.isSaving || viewModel.isImporting)
 
                     // 执行
                     executeSection
@@ -107,46 +111,9 @@ struct ImageProcessingView: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(AppColors.textPrimary)
 
-            VStack(spacing: 12) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 32))
-                    .foregroundColor(AppColors.textSecondary.opacity(0.5))
-
-                Text("拖拽图片到此处，或点击下方按钮选择")
-                    .font(.system(size: 13))
-                    .foregroundColor(AppColors.textSecondary)
-
-                HStack(spacing: 12) {
-                    Button(action: { viewModel.selectImages() }) {
-                        Label("选择图片", systemImage: "folder")
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                    .buttonStyle(.bordered)
-
-                    if !viewModel.selectedImages.isEmpty {
-                        Button(action: { viewModel = ImageCompressionViewModel() }) {
-                            Label("清空列表", systemImage: "trash")
-                                .font(.system(size: 13, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(
-                        AppColors.textSecondary.opacity(0.3),
-                        style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
-                    )
-            )
-            .background(AppColors.cardBackground.opacity(0.6))
-            .cornerRadius(10)
-            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                handleImageDrop(providers: providers)
-                return true
-            }
+            FileDropZone(hasFiles: !viewModel.selectedImages.isEmpty, isImporting: viewModel.isImporting,
+                select: { viewModel.selectImages() }, clear: { viewModel.clearImages() },
+                cancelImport: { viewModel.cancelImport() }, receive: { viewModel.importImages(from: $0) })
 
             // 已选文件列表（可删除单张 + 调整顺序）
             if !viewModel.selectedImages.isEmpty {
@@ -174,7 +141,7 @@ struct ImageProcessingView: View {
             .background(AppColors.primaryLight.opacity(0.35))
 
             // 文件行
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 0) {
                 ForEach(viewModel.selectedImages, id: \.self) { url in
                     HStack(spacing: 8) {
                         Image(systemName: "photo")
@@ -511,9 +478,9 @@ struct ImageProcessingView: View {
                 .disabled(!viewModel.canExecute)
 
                 if let msg = viewModel.successMessage {
-                    Label(msg, systemImage: "checkmark.circle.fill")
+                    Label(msg, systemImage: viewModel.messageIcon)
                         .font(.system(size: 13))
-                        .foregroundColor(AppColors.success)
+                        .foregroundColor(viewModel.messageColor)
                 }
                 if let msg = viewModel.errorMessage {
                     Label(msg, systemImage: "exclamationmark.triangle.fill")
@@ -527,6 +494,8 @@ struct ImageProcessingView: View {
             }
             if viewModel.isProcessing {
                 Button("停止后续图片", action: { viewModel.cancelProcessing() }).buttonStyle(.bordered)
+            } else if viewModel.canRetry {
+                Button("重试未完成项", action: viewModel.retryFailed).buttonStyle(.bordered)
             }
             // 大文件警告
             if let warning = viewModel.largeFileWarning {
@@ -547,10 +516,11 @@ struct ImageProcessingView: View {
                     .foregroundColor(AppColors.textPrimary)
                 Spacer()
                 Button(action: { viewModel.saveResults() }) {
-                    Label("保存到...", systemImage: "square.and.arrow.down")
+                    Label(viewModel.isSaving ? "正在保存…" : "保存到...", systemImage: "square.and.arrow.down")
                         .font(.system(size: 13, weight: .medium))
                 }
                 .buttonStyle(.bordered)
+                .disabled(viewModel.isProcessing || viewModel.isSaving)
             }
 
             VStack(spacing: 0) {
@@ -570,7 +540,7 @@ struct ImageProcessingView: View {
                 .padding(.vertical, 10)
                 .background(AppColors.primaryLight.opacity(0.5))
 
-                VStack(spacing: 0) {
+                LazyVStack(spacing: 0) {
                     ForEach(viewModel.results, id: \.originalURL) { result in
                         resultRow(result)
                         if result.originalURL != viewModel.results.last?.originalURL {
@@ -630,18 +600,6 @@ struct ImageProcessingView: View {
 
     // MARK: - 拖拽处理
 
-    private func handleImageDrop(providers: [NSItemProvider]) {
-        for provider in providers {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                if let data = item as? Data,
-                   let url = URL(dataRepresentation: data, relativeTo: nil) {
-                    DispatchQueue.main.async {
-                        viewModel.addImages(from: [url])
-                    }
-                }
-            }
-        }
-    }
     // MARK: - 安全移除图片
 
     /// 移除单张图片：当只剩一张时替换整个 ViewModel（原子操作），避免多个条件区块同时消失导致布局死锁

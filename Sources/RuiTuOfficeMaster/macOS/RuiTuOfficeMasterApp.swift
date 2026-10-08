@@ -37,6 +37,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         !AppSettings.shared.minimizeToTray
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard ProcessingActivity.isBusy else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "仍有任务正在处理或保存"
+        alert.informativeText = "现在退出会中断任务，尚未保存的结果可能需要重新处理。建议先停止任务并保存结果。"
+        alert.addButton(withTitle: "继续处理")
+        alert.addButton(withTitle: "仍然退出")
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+    }
+
     /// App 从后台切回前台时，补偿 NavigationSplitView + hiddenTitleBar 的 key window 丢失
     func applicationDidBecomeActive(_ notification: Notification) {
         Task { @MainActor in

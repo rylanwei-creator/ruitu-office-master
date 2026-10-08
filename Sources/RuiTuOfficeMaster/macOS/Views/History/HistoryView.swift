@@ -315,8 +315,8 @@ private struct RecordRow: View {
 
     private var statusColor: Color {
         switch record.status {
-        case "成功": return AppColors.success
-        case "失败": return AppColors.error
+        case "成功", "处理完成": return AppColors.success
+        case "失败", "处理失败": return AppColors.error
         default:    return Color(hex: "#FF9500")
         }
     }

@@ -11,6 +11,7 @@ enum NavItem: String, CaseIterable, Identifiable {
     case videoCompression = "视频压缩"
     case mediaConversion = "音视频转换"
     case ocr = "OCR 文字识别"
+    case tasks = "任务中心"
     case history = "历史记录"
     case settings = "设置"
 
@@ -28,6 +29,7 @@ enum NavItem: String, CaseIterable, Identifiable {
         case .videoCompression: return "video"
         case .mediaConversion: return "waveform"
         case .ocr: return "text.viewfinder"
+        case .tasks: return "list.bullet.clipboard"
         case .history: return "clock"
         case .settings: return "gear"
         }
@@ -35,6 +37,6 @@ enum NavItem: String, CaseIterable, Identifiable {
 
     /// 分组（用于侧边栏分隔）
     var isUtility: Bool {
-        self == .history || self == .settings
+        self == .tasks || self == .history || self == .settings
     }
 }

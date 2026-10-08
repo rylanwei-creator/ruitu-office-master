@@ -60,6 +60,11 @@ actor ImageCompressionWorker {
         }
     }
 
+    func convert(url: URL, format: ConversionFormat, outputURL: URL) throws {
+        try Task.checkCancellation()
+        try autoreleasepool { try FormatConversionService().convert(url: url, to: format, outputURL: outputURL) }
+    }
+
     func compress(url: URL, quality: Double, maxDimension: CGFloat?, outputFormat: OutputFormat,
                   outputURL: URL, targetSize: CGSize?, fitWithin: CGSize?) throws {
         try Task.checkCancellation()

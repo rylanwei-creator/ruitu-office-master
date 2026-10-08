@@ -37,19 +37,21 @@ enum OutputFormat: String, CaseIterable, Sendable {
 final class ImageCompressionViewModel {
     var selectedImages: [URL] = []
     var compressionLevel: CompressionLevel = .balanced
-    var quality: Double = 0.72
+    var quality: Double = 0.72 { didSet { if oldValue != quality { invalidateResults() } } }
     var showCustomSlider = false
-    var sizeMode: SizeMode = .aspectRatio { didSet { refreshEstimates() } }
-    var maxDimension: CGFloat = 2048
-    var customWidth = ""
-    var customHeight = ""
-    var aspectWidth = ""
-    var aspectHeight = ""
-    var outputFormat: OutputFormat = .keepOriginal
+    var sizeMode: SizeMode = .aspectRatio { didSet { if oldValue != sizeMode { invalidateResults(); refreshEstimates() } } }
+    var maxDimension: CGFloat = 2048 { didSet { if oldValue != maxDimension { invalidateResults() } } }
+    var customWidth = "" { didSet { if oldValue != customWidth { invalidateResults() } } }
+    var customHeight = "" { didSet { if oldValue != customHeight { invalidateResults() } } }
+    var aspectWidth = "" { didSet { if oldValue != aspectWidth { invalidateResults() } } }
+    var aspectHeight = "" { didSet { if oldValue != aspectHeight { invalidateResults() } } }
+    var outputFormat: OutputFormat = .keepOriginal { didSet { if oldValue != outputFormat { invalidateResults() } } }
     var originalSizes: [URL: Int64] = [:]
     var estimatedSizes: [URL: Int64] = [:]
     var isEstimating = false
     var estimationFailed = false
+    var isImporting = false
+    var isSaving = false
     var isProcessing = false { didSet { ProcessingActivity.setActive(isProcessing, owner: ObjectIdentifier(self)) } }
     var progress: Double = 0
     var currentFileName = ""
@@ -57,7 +59,20 @@ final class ImageCompressionViewModel {
     var successMessage: String?
     var errorMessage: String?
     private var estimationTask: Task<Void, Never>?
-    private var processingTask: Task<Void, Never>?
+    private var importTask: Task<Void, Never>?
+    private(set) var taskID: UUID?
+    private let taskManager: FileTaskManager
+    private var importedDimensions: [URL: CGSize] = [:]
+    private var importedTypes: [URL: String] = [:]
+    init(taskManager: FileTaskManager = .shared) { self.taskManager = taskManager }
+    deinit { ProcessingActivity.setActive(false, owner: ObjectIdentifier(self)) }
+    var messageColor: Color {
+        if errorMessage != nil { return results.isEmpty ? AppColors.error : .orange }
+        if let taskID, taskManager.record(taskID)?.state == .cancelled { return .orange }
+        return AppColors.success
+    }
+    var messageIcon: String { messageColor == AppColors.success ? "checkmark.circle.fill" : "info.circle.fill" }
+    var canRetry: Bool { taskID.map { taskManager.canRetry($0) } ?? false }
     private var estimateID = UUID()
 
     var effectiveQuality: Double { compressionLevel == .custom ? quality : compressionLevel.qualityValue }
@@ -69,7 +84,7 @@ final class ImageCompressionViewModel {
         sizeMode == .aspectRatio ? CGSize(width: Int(aspectWidth) ?? 0, height: Int(aspectHeight) ?? 0) : nil
     }
     var aspectRatio: CGFloat {
-        guard let url = selectedImages.first, let size = try? ImageCodec.dimensions(at: url) else { return 1 }
+        guard let url = selectedImages.first, let size = importedDimensions[url] else { return 1 }
         return size.width / size.height
     }
     var imageCountText: String { "已选择 \(selectedImages.count) 张图片" }
@@ -105,18 +120,20 @@ final class ImageCompressionViewModel {
     }
     var qualityPercent: Int { Int(effectiveQuality * 100) }
     var validationMessage: String? {
+        guard effectiveQuality.isFinite, (0...1).contains(effectiveQuality) else { return CompressionError.invalidQuality.localizedDescription }
         let svc = ImageCompressionService()
         for url in selectedImages {
             do {
-                try ImageCodec.validateStaticImage(at: url)
-                _ = try svc.outputType(for: outputFormat, originalURL: url)
-                _ = try ImageCodec.outputSize(original: ImageCodec.dimensions(at: url), maxDimension: effectiveMaxDimension,
+                guard let size = importedDimensions[url], let identifier = importedTypes[url], let type = UTType(identifier) else { return "图片信息不完整，请重新导入" }
+                if outputFormat == .keepOriginal, !ImageCodec.supports(type) { return "本机不支持原格式编码，请选择 JPG 或 PNG" }
+                if outputFormat != .keepOriginal { _ = try svc.outputType(for: outputFormat, originalURL: url) }
+                _ = try ImageCodec.outputSize(original: size, maxDimension: effectiveMaxDimension,
                                               targetSize: customSize, fitWithin: boundingSize)
             } catch { return error.localizedDescription }
         }
         return nil
     }
-    var canExecute: Bool { !selectedImages.isEmpty && !isProcessing && validationMessage == nil }
+    var canExecute: Bool { !selectedImages.isEmpty && !isProcessing && !isImporting && !isSaving && validationMessage == nil }
     var hasLargeFiles: Bool { originalSizes.values.contains { $0 > 50_000_000 } }
     var largeFileWarning: String? { hasLargeFiles ? "包含超过 50MB 的图片，处理可能需要较长时间" : nil }
     var smallFileNote: String? {
@@ -124,6 +141,7 @@ final class ImageCompressionViewModel {
     }
 
     func selectCompressionLevel(_ level: CompressionLevel) {
+        invalidateResults()
         compressionLevel = level
         showCustomSlider = level == .custom
         if level != .custom { quality = level.qualityValue }
@@ -144,51 +162,77 @@ final class ImageCompressionViewModel {
         refreshEstimates()
     }
     func selectImages() {
-        guard !isProcessing else { return }
+        guard !isProcessing, !isImporting, !isSaving else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
         panel.allowedContentTypes = ImageCompressionService.supportedFormats
-        if panel.runModal() == .OK { addImages(from: panel.urls) }
+        Task { [weak self] in
+            guard await FileDialogs.response(to: panel) == .OK else { return }
+            self?.importImages(from: panel.urls)
+        }
     }
     func removeImage(url: URL) {
-        guard !isProcessing else { return }
+        guard !isProcessing, !isImporting, !isSaving else { return }
         selectedImages.removeAll { $0 == url }
         originalSizes.removeValue(forKey: url)
-        results = []
+        importedDimensions.removeValue(forKey: url); importedTypes.removeValue(forKey: url)
+        invalidateResults()
         refreshEstimates()
     }
     func moveImages(from source: IndexSet, to destination: Int) {
-        guard !isProcessing else { return }
+        guard !isProcessing, !isImporting, !isSaving else { return }
         selectedImages.move(fromOffsets: source, toOffset: destination)
-        results = []
+        invalidateResults()
     }
     func addImages(from urls: [URL]) {
-        guard !isProcessing else { return }
-        var rejected: [String] = []
-        let wasEmpty = selectedImages.isEmpty
-        for url in urls where !selectedImages.contains(url) {
-            guard url.isFileURL, let type = try? ImageCodec.sourceType(at: url),
-                  ImageCompressionService.supportedFormats.contains(where: { type.conforms(to: $0) }),
-                  (try? ImageCodec.dimensions(at: url)) != nil else {
-                rejected.append(url.lastPathComponent); continue
-            }
-            selectedImages.append(url)
-            originalSizes[url] = FileUtils.fileSize(of: url)
+        guard !isProcessing, !isImporting, !isSaving else { return }
+        do { apply(try ImageFileImporter.collect(urls, excluding: selectedImages)) }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func importImages(from urls: [URL]) {
+        guard !isProcessing, !isImporting, !isSaving else { return }
+        estimationTask?.cancel(); isEstimating = false
+        isImporting = true; errorMessage = nil
+        let excluded = selectedImages
+        importTask = Task { [weak self] in
+            do {
+                let report = try await ImageFileImporter.collectInBackground(urls, excluding: excluded)
+                try Task.checkCancellation()
+                self?.apply(report)
+            } catch { self?.errorMessage = error is CancellationError ? "导入已停止，原列表保留" : error.localizedDescription }
+            self?.isImporting = false
+            self?.refreshEstimates()
         }
-        if wasEmpty, let first = selectedImages.first, let size = try? ImageCodec.dimensions(at: first) {
+    }
+    func cancelImport() { importTask?.cancel() }
+    private func apply(_ report: ImageImportReport) {
+        let wasEmpty = selectedImages.isEmpty
+        invalidateResults()
+        for image in report.images {
+            selectedImages.append(image.url); originalSizes[image.url] = image.size
+            importedDimensions[image.url] = image.dimensions; importedTypes[image.url] = image.typeIdentifier
+        }
+        if wasEmpty, let first = selectedImages.first, let size = importedDimensions[first] {
             aspectWidth = String(Int(size.width)); aspectHeight = String(Int(size.height))
         }
-        results = []
-        successMessage = nil
-        errorMessage = rejected.isEmpty ? nil : "无法读取：" + rejected.joined(separator: "、")
+        errorMessage = report.message
+        if report.duplicates > 0 { successMessage = "已跳过 \(report.duplicates) 个重复文件" }
         refreshEstimates()
     }
+    func clearImages() {
+        guard !isProcessing, !isImporting, !isSaving else { return }
+        selectedImages = []; originalSizes = [:]; importedDimensions = [:]; importedTypes = [:]
+        invalidateResults(); refreshEstimates()
+    }
+    private func invalidateResults() { taskID = nil; results = []; successMessage = nil; errorMessage = nil; progress = 0 }
     func refreshEstimates() {
         estimationTask?.cancel()
         estimatedSizes = [:]
         isEstimating = false; estimationFailed = false
         let id = UUID(); estimateID = id
-        guard !selectedImages.isEmpty, !isProcessing, validationMessage == nil else { return }
+        guard !selectedImages.isEmpty, !isProcessing, !isImporting else { return }
+        guard validationMessage == nil else { estimationFailed = true; return }
         isEstimating = true
         let urls = selectedImages, q = effectiveQuality, fmt = outputFormat
         let maxDim = effectiveMaxDimension, target = customSize, box = boundingSize
@@ -219,64 +263,54 @@ final class ImageCompressionViewModel {
         guard canExecute else { errorMessage = validationMessage; return }
         estimationTask?.cancel()
         estimateID = UUID(); isEstimating = false
-        isProcessing = true; progress = 0; results = []; successMessage = nil; errorMessage = nil
-        let urls = selectedImages, q = effectiveQuality, fmt = outputFormat
+        results = []; successMessage = nil; errorMessage = nil
+        let q = effectiveQuality, fmt = outputFormat
         let maxDim = effectiveMaxDimension, target = customSize, box = boundingSize
-        let update: @MainActor @Sendable (Double, String) -> Void = { [weak self] progress, name in
-            self?.progress = progress
-            self?.currentFileName = name
+        let settings = "\(compressionLevel.rawValue) · 质量 \(Int(q * 100))% · \(fmt.rawValue) · \(sizeMode.rawValue)" +
+            (maxDim.map { " \(String(format: "%.0f", Double($0)))px" } ?? "") + (target.map { " \(Int($0.width))×\(Int($0.height))px" } ?? "") + (box.map { " \(Int($0.width))×\(Int($0.height))px" } ?? "")
+        let id = taskManager.enqueue(tool: "图片处理", configuration: settings, sources: selectedImages) { url in
+            let type = try ImageCompressionService().outputType(for: fmt, originalURL: url)
+            let dir = try CacheManager.makeTaskDirectory(in: CacheManager.imageCacheDirectory)
+            let destination = dir.appendingPathComponent(url.deletingPathExtension().lastPathComponent + "_处理." + (type.preferredFilenameExtension ?? "png"))
+            do {
+                try await ImageCompressionWorker.shared.compress(url: url, quality: q, maxDimension: maxDim,
+                    outputFormat: fmt, outputURL: destination, targetSize: target, fitWithin: box)
+                return FileTaskOutput(url: destination, inputSize: FileUtils.fileSize(of: url), outputSize: FileUtils.fileSize(of: destination))
+            } catch { try? FileManager.default.removeItem(at: dir); throw error }
+        } onChange: { [weak self] record in
+            guard self?.taskID == record.id else { return }
+            self?.consume(record)
         }
-        processingTask = Task { [weak self] in
-            let worker = Task.detached(priority: .userInitiated) {
-                var output: [CompressionResult] = [], errors: [String] = []
-                for (index, url) in urls.enumerated() {
-                    if Task.isCancelled { break }
-                    await update(Double(index) / Double(urls.count), url.lastPathComponent)
-                    do {
-                        let type = try ImageCompressionService().outputType(for: fmt, originalURL: url)
-                        let dir = try CacheManager.makeTaskDirectory(in: CacheManager.imageCacheDirectory)
-                        let name = url.deletingPathExtension().lastPathComponent + "_处理." + (type.preferredFilenameExtension ?? "png")
-                        let dest = dir.appendingPathComponent(name)
-                        try await ImageCompressionWorker.shared.compress(url: url, quality: q, maxDimension: maxDim,
-                            outputFormat: fmt, outputURL: dest, targetSize: target, fitWithin: box)
-                        let result = CompressionResult(originalURL: url, compressedURL: dest,
-                            originalSize: FileUtils.fileSize(of: url), compressedSize: FileUtils.fileSize(of: dest))
-                        output.append(result)
-                    } catch {
-                        if Task.isCancelled { break }
-                        errors.append("\(url.lastPathComponent)：\(error.localizedDescription)")
-                    }
-                    await update(Double(index + 1) / Double(urls.count), url.lastPathComponent)
-                }
-                return (output, errors)
-            }
-            let (output, errors) = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
-            guard let self else { return }
-            self.results = output; self.isProcessing = false
-            // 完成后直接采用实际字节数，覆盖导出前的计算结果。
-            for result in output {
-                self.originalSizes[result.originalURL] = result.originalSize
-                self.estimatedSizes[result.originalURL] = result.compressedSize
-            }
-            self.estimationFailed = !self.hasCompleteEstimate && !errors.isEmpty
-            self.successMessage = "\(Task.isCancelled ? "已停止" : "处理完成")：\(output.count) 张成功，\(errors.count) 张失败"
-            self.errorMessage = errors.isEmpty ? nil : errors.joined(separator: "\n")
-            if !output.isEmpty {
-                HistoryService().addRecord(toolName: "图片处理", operationType: "压缩与尺寸调整", fileCount: output.count,
-                    inputFileNames: output.map { $0.originalURL.lastPathComponent }, status: errors.isEmpty ? "成功" : "部分成功",
-                    inputSize: output.reduce(0) { $0 + $1.originalSize }, outputSize: output.reduce(0) { $0 + $1.compressedSize },
-                    descriptionText: self.successMessage ?? "处理完成")
-            }
-        }
+        taskID = id
+        if let record = taskManager.record(id) { consume(record) }
     }
-    func cancelProcessing() { processingTask?.cancel() }
+    private func consume(_ record: FileTaskRecord) {
+        isProcessing = record.state.isActive; progress = record.progress
+        currentFileName = record.cancellationRequested && record.state.isActive ? "正在停止，当前图片编码结束后退出…" : record.currentFile
+        results = record.files.compactMap { item in
+            guard item.state == .completed, let output = item.output else { return nil }
+            return CompressionResult(originalURL: item.source, compressedURL: output.url, originalSize: output.inputSize, compressedSize: output.outputSize)
+        }
+        guard !record.state.isActive else { return }
+        for result in results { originalSizes[result.originalURL] = result.originalSize; estimatedSizes[result.originalURL] = result.compressedSize }
+        estimationFailed = !hasCompleteEstimate && record.failed > 0
+        successMessage = record.summary
+        errorMessage = record.files.compactMap { item in item.error.map { "\(item.source.lastPathComponent)：\($0)" } }.joined(separator: "\n")
+        if errorMessage?.isEmpty == true { errorMessage = nil }
+        HistoryService().addRecord(toolName: "图片处理", operationType: "压缩与尺寸调整", fileCount: record.files.count,
+            inputFileNames: record.files.map { $0.source.lastPathComponent }, status: record.state.title,
+            inputSize: results.reduce(0) { $0 + $1.originalSize }, outputSize: results.reduce(0) { $0 + $1.compressedSize }, descriptionText: record.summary)
+    }
+    func cancelProcessing() { if let taskID { taskManager.cancel(taskID) } }
+    func retryFailed() { if let taskID { taskManager.retry(taskID) } }
     func saveResults() {
-        guard !isProcessing, !results.isEmpty else { return }
+        guard !isProcessing, !isSaving, !results.isEmpty else { return }
         let urls = results.map(\.compressedURL)
+        isSaving = true
         Task {
-            isProcessing = true
-            defer { isProcessing = false }
+            defer { isSaving = false }
             if let report = await ResultExporter.save(urls) {
+                if let taskID { taskManager.recordExport(taskID, report: report) }
                 successMessage = report.message
                 errorMessage = report.errors.isEmpty ? nil : report.errors.joined(separator: "\n")
             }
