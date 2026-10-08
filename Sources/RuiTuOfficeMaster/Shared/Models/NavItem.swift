@@ -1,0 +1,40 @@
+import SwiftUI
+
+/// 导航项枚举 — 定义侧边栏所有可导航的页面
+enum NavItem: String, CaseIterable, Identifiable {
+    case home = "首页"
+    case fileRename = "文件改名"
+    case imageProcessing = "图片处理"
+    case idPhoto = "证件照"
+    case pdfTools = "PDF 工具"
+    case formatConversion = "格式转换"
+    case videoCompression = "视频压缩"
+    case mediaConversion = "音视频转换"
+    case ocr = "OCR 文字识别"
+    case history = "历史记录"
+    case settings = "设置"
+
+    var id: String { rawValue }
+
+    /// SF Symbols 图标名
+    var systemImage: String {
+        switch self {
+        case .home: return "house"
+        case .fileRename: return "pencil"
+        case .imageProcessing: return "photo"
+        case .idPhoto: return "person.crop.rectangle"
+        case .pdfTools: return "doc.on.doc"
+        case .formatConversion: return "photo.stack"
+        case .videoCompression: return "video"
+        case .mediaConversion: return "waveform"
+        case .ocr: return "text.viewfinder"
+        case .history: return "clock"
+        case .settings: return "gear"
+        }
+    }
+
+    /// 分组（用于侧边栏分隔）
+    var isUtility: Bool {
+        self == .history || self == .settings
+    }
+}
