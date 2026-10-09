@@ -11,6 +11,7 @@ import Translation
 
 struct OCRView: View {
     @State private var viewModel = OCRViewModel()
+    @State private var previewResult: OCRImageResult?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -81,6 +82,9 @@ struct OCRView: View {
                 .padding(.bottom, 8)
         }
         .background(AppColors.background)
+        .sheet(item: $previewResult) { result in
+            OCRSourcePreview(url: result.sourceURL)
+        }
     }
 
     // MARK: - 子功能介绍
@@ -488,18 +492,20 @@ struct OCRView: View {
                     .buttonStyle(.bordered)
 
                     Button(action: { viewModel.copyAllText() }) {
-                        Label("一键复制", systemImage: "doc.on.doc")
+                        Label(viewModel.imageResults.isEmpty ? "一键复制" : "复制全部", systemImage: "doc.on.doc")
                             .font(.system(size: 12))
                     }
                     .buttonStyle(.bordered)
 
-                    Button(action: {
-                        NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
-                    }) {
-                        Label("全选文本", systemImage: "text.cursor")
-                            .font(.system(size: 12))
+                    if viewModel.imageResults.isEmpty {
+                        Button(action: {
+                            NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                        }) {
+                            Label("全选文本", systemImage: "text.cursor")
+                                .font(.system(size: 12))
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
 
                     Button(action: { viewModel.exportAsWord() }) {
                         Label("导出 RTF 文档", systemImage: "doc.badge.gearshape")
@@ -507,45 +513,127 @@ struct OCRView: View {
                     }
                     .buttonStyle(.bordered)
 
-                    Button(action: { viewModel.saveAsText() }) {
-                        Label("保存 TXT", systemImage: "square.and.arrow.down")
-                            .font(.system(size: 12))
+                    if viewModel.imageResults.isEmpty {
+                        Button(action: { viewModel.saveAsText() }) {
+                            Label("保存 TXT", systemImage: "square.and.arrow.down")
+                                .font(.system(size: 12))
+                        }
+                        .buttonStyle(.bordered)
+                    } else {
+                        Menu {
+                            Button("合并为一个 TXT") { viewModel.saveAsText() }
+                            Button("每张图片单独一个 TXT…") { viewModel.saveSeparateTexts() }
+                                .disabled(viewModel.isExportingTexts || !viewModel.hasText)
+                        } label: {
+                            Label(viewModel.isExportingTexts ? "正在导出…" : "导出 TXT", systemImage: "square.and.arrow.down")
+                                .font(.system(size: 12))
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
                     }
-                    .buttonStyle(.bordered)
 
                     Button(action: { viewModel.triggerTranslation() }) {
                         Label(
-                            viewModel.isTranslating ? "翻译中..." : "一键翻译",
+                            viewModel.isTranslating ? "翻译中..." : (viewModel.imageResults.isEmpty ? "一键翻译" : "翻译全部"),
                             systemImage: "globe"
                         )
                         .font(.system(size: 12))
                     }
                     .buttonStyle(.bordered)
-                    .disabled(viewModel.isTranslating)
+                    .disabled(viewModel.isTranslating || !viewModel.hasText)
                 }
             }
 
-            TextEditor(text: $viewModel.recognizedText)
-                .font(.system(size: 14))
-                .frame(minHeight: 300)
-                .padding(12)
-                .background(AppColors.cardBackground)
-                .cornerRadius(10)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(Color.gray.opacity(0.2), lineWidth: 1)
-                )
-                .overlay(alignment: .topLeading) {
-                    if viewModel.recognizedText.isEmpty {
-                        Text("识别结果将显示在这里...")
-                            .font(.system(size: 13))
-                            .foregroundColor(AppColors.textSecondary.opacity(0.5))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 20)
-                            .allowsHitTesting(false)
+            if viewModel.imageResults.isEmpty {
+                TextEditor(text: $viewModel.recognizedText)
+                    .font(.system(size: 14))
+                    .frame(minHeight: 300)
+                    .padding(12)
+                    .background(AppColors.cardBackground)
+                    .cornerRadius(10)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                    )
+                    .overlay(alignment: .topLeading) {
+                        if viewModel.recognizedText.isEmpty {
+                            Text("识别结果将显示在这里...")
+                                .font(.system(size: 13))
+                                .foregroundColor(AppColors.textSecondary.opacity(0.5))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 20)
+                                .allowsHitTesting(false)
+                        }
                     }
+            } else {
+                Text("点击缩略图可放大原图；每张图片可分别编辑和保存，也可合并或分别导出 TXT。")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppColors.textSecondary)
+                ForEach(Array(viewModel.imageResults.enumerated()), id: \.element.id) { index, result in
+                    imageResultCard(result, index: index)
                 }
+            }
         }
+    }
+
+    private func imageResultCard(_ result: OCRImageResult, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                OCRSourceThumbnail(url: result.sourceURL) { previewResult = result }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("图片 \(index + 1)")
+                        .font(.system(size: 11))
+                        .foregroundColor(AppColors.textSecondary)
+                    Text(result.fileName)
+                        .font(.system(size: 14, weight: .semibold))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(result.sourceURL.path)
+                }
+                Spacer(minLength: 12)
+                Button { viewModel.copyText(result.text) } label: {
+                    Label("复制文字", systemImage: "doc.on.doc")
+                }
+                .disabled(!result.hasText)
+                Button { viewModel.saveAsText(resultID: result.id) } label: {
+                    Label("保存 TXT", systemImage: "square.and.arrow.down")
+                }
+                .disabled(!result.hasText)
+            }
+            .buttonStyle(.bordered)
+            .font(.system(size: 12))
+
+            if !result.hasText, let notice = result.notice {
+                Label(notice, systemImage: "info.circle")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppColors.textSecondary)
+            }
+            OCRAdaptiveTextEditor(text: Binding(
+                get: { viewModel.imageResults.first(where: { $0.id == result.id })?.text ?? "" },
+                set: { viewModel.setImageText(id: result.id, text: $0) }
+            ), label: "\(result.fileName) 的识别文字")
+
+            if !result.translatedText.isEmpty {
+                Divider()
+                HStack {
+                    Text("译文 · \(result.fileName)")
+                        .font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    Button { viewModel.copyText(result.translatedText) } label: {
+                        Label("复制译文", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                OCRAdaptiveTextEditor(text: Binding(
+                    get: { viewModel.imageResults.first(where: { $0.id == result.id })?.translatedText ?? "" },
+                    set: { viewModel.setImageTranslation(id: result.id, text: $0) }
+                ), label: "\(result.fileName) 的译文")
+            }
+        }
+        .padding(16)
+        .background(AppColors.cardBackground)
+        .cornerRadius(12)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.gray.opacity(0.2), lineWidth: 1))
     }
 
     // MARK: - 翻译结果

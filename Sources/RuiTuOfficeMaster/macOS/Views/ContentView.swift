@@ -20,6 +20,12 @@ struct ContentView: View {
                 ImageProcessingView()
                     .pageVisible(selectedNav == .imageProcessing)
 
+                ImageCleanupView(tool: .cutout)
+                    .pageVisible(selectedNav == .cutout)
+
+                ImageCleanupView(tool: .watermark)
+                    .pageVisible(selectedNav == .imageWatermark)
+
                 IDPhotoView()
                     .pageVisible(selectedNav == .idPhoto)
 

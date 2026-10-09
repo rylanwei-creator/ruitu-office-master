@@ -43,7 +43,7 @@ enum WatermarkType {
 
 // MARK: - 加密配置
 
-struct EncryptionConfig {
+struct EncryptionConfig: Sendable, Equatable {
     let userPassword: String
     let ownerPassword: String
     let allowPrinting: Bool
@@ -52,7 +52,7 @@ struct EncryptionConfig {
 
 // MARK: - 拆分范围
 
-struct SplitRange {
+struct SplitRange: Sendable, Equatable {
     let start: Int
     let end: Int
 }
@@ -72,17 +72,21 @@ struct PDFService {
         try data.write(to: url, options: .atomic)
     }
     func pageCount(of url: URL) -> Int { (try? load(url).pageCount) ?? 0 }
-    func merge(urls: [URL], outputURL: URL) throws {
+    func validate(url: URL) throws { _ = try load(url) }
+    func merge(urls: [URL], outputURL: URL, shouldStop: () -> Bool = { false }) throws {
         guard !urls.contains(where: { $0.standardizedFileURL == outputURL.standardizedFileURL }) else { throw CompressionError.sameFile }
         let destination = PDFDocument()
         for url in urls {
+            if shouldStop() { throw CancellationError() }
             let source = try load(url)
             for i in 0..<source.pageCount {
+                if shouldStop() { throw CancellationError() }
                 guard let page = source.page(at: i)?.copy() as? PDFPage else { throw PDFError.invalidSource(url: url) }
                 destination.insert(page, at: destination.pageCount)
             }
         }
         guard destination.pageCount > 0 else { throw PDFError.noPages }
+        if shouldStop() { throw CancellationError() }
         try write(destination, to: outputURL)
     }
     func split(url: URL, ranges: [SplitRange], outputDir: URL) throws -> [URL] {

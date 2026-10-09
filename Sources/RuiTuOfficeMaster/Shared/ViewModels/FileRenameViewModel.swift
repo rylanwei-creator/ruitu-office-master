@@ -4,8 +4,9 @@ import UniformTypeIdentifiers
 
 // MARK: - 文件改名 ViewModel
 
+@MainActor
 @Observable
-final class FileRenameViewModel: @unchecked Sendable {
+final class FileRenameViewModel {
 
     // MARK: 文件选择
     var selectedFiles: [URL] = []
@@ -33,6 +34,12 @@ final class FileRenameViewModel: @unchecked Sendable {
     var errorMessage: String?
 
     private var lastMoves: [RenameMove] = []
+    private(set) var completedMoves: [RenameMove] = []
+    private(set) var didUndo = false
+    private(set) var isUndoing = false
+    var hasOperationFeedback: Bool {
+        isProcessing || successMessage != nil || errorMessage != nil || !completedMoves.isEmpty
+    }
     var canUndo: Bool { !isProcessing && !lastMoves.isEmpty }
 
     private let service = FileRenameService()
@@ -100,7 +107,6 @@ final class FileRenameViewModel: @unchecked Sendable {
             url.isFileURL && !selectedFiles.contains(url)
         }
         selectedFiles.append(contentsOf: newURLs)
-        clearMessages()
         generatePreview()
     }
 
@@ -110,15 +116,20 @@ final class FileRenameViewModel: @unchecked Sendable {
         guard !isProcessing else { return }
         guard let index = selectedFiles.firstIndex(of: url) else { return }
         selectedFiles.remove(at: index)
-        clearMessages()
         generatePreview()
     }
 
     func moveFiles(from source: IndexSet, to destination: Int) {
         guard !isProcessing else { return }
         selectedFiles.move(fromOffsets: source, toOffset: destination)
-        clearMessages()
         generatePreview()
+    }
+
+    /// 清空待处理文件不应丢失上一批结果、撤销记录或改名参数。
+    func clearFiles() {
+        guard !isProcessing else { return }
+        selectedFiles = []
+        previewItems = []
     }
 
     // MARK: 预览
@@ -145,68 +156,69 @@ final class FileRenameViewModel: @unchecked Sendable {
     // MARK: 执行改名
 
     func executeRename() {
-        guard canExecute, !previewItems.isEmpty else { return }
-
+        guard canExecute else { return }
         isProcessing = true
         progress = 0
         clearMessages()
 
         let items = previewItems
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-
-            let result = self.service.execute(previewItems: items) { prog in
-                DispatchQueue.main.async { [weak self] in
-                    self?.progress = prog
-                    let idx = Int(prog * Double(items.count))
-                    if idx < items.count {
-                        self?.currentFileName = items[idx].originalName
+        let validItems = items.filter(\.isValid)
+        let mode = renameMode
+        currentFileName = validItems.first?.originalName ?? ""
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { [self] in
+                FileRenameService().execute(previewItems: items) { value in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isProcessing, !self.isUndoing else { return }
+                        self.progress = value
+                        let index = max(0, min(validItems.count - 1, Int(value * Double(validItems.count)) - 1))
+                        self.currentFileName = validItems[index].originalName
                     }
                 }
-            }
-
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.isProcessing = false
-                switch result {
-                case .success(let moves):
-                    let count = moves.count
-                    self.lastMoves = moves
-                    self.successMessage = "成功改名 \(count) 个文件"
-                    self.selectedFiles = []
-                    self.previewItems = []
-                    HistoryService().addRecord(
-                        toolName: "文件改名",
-                        operationType: self.renameMode.rawValue,
-                        fileCount: count,
-                        inputFileNames: items.map(\.originalName),
-                        status: "成功",
-                        inputSize: 0,
-                        outputSize: 0,
-                        descriptionText: "成功改名 \(count) 个文件"
-                    )
-                case .failure(let errors):
-                    self.errorMessage = errors.joined(separator: "\n")
-                }
+            }.value
+            isProcessing = false
+            currentFileName = ""
+            switch result {
+            case .success(let moves):
+                progress = 1
+                lastMoves = moves
+                completedMoves = moves
+                didUndo = false
+                let skipped = items.count - moves.count
+                successMessage = "成功改名 \(moves.count) 个文件" + (skipped > 0 ? "，\(skipped) 个文件名未变化，已跳过" : "")
+                selectedFiles = []
+                previewItems = []
+                HistoryService().addRecord(
+                    toolName: "文件改名", operationType: mode.rawValue, fileCount: moves.count,
+                    inputFileNames: moves.map { $0.original.lastPathComponent }, status: "成功",
+                    inputSize: 0, outputSize: 0, descriptionText: successMessage ?? ""
+                )
+            case .failure(let errors):
+                errorMessage = "改名失败：\n" + errors.joined(separator: "\n")
             }
         }
     }
 
-    @MainActor
     func undoRename() {
         guard canUndo else { return }
         let moves = lastMoves
         isProcessing = true
+        isUndoing = true
+        clearMessages()
         Task {
-            let result = await Task.detached { FileRenameService().undo(moves) }.value
+            let result = await Task.detached(priority: .userInitiated) { FileRenameService().undo(moves) }.value
             isProcessing = false
+            isUndoing = false
             switch result {
             case .success:
                 lastMoves = []
-                successMessage = "已恢复上次改名的原文件名"
-                errorMessage = nil
-            case .failure(let errors): errorMessage = errors.joined(separator: "\n")
+                didUndo = true
+                successMessage = "撤销成功，已恢复 \(moves.count) 个文件的原文件名"
+                // 若用户已重新选中了改名后的文件，撤销后更新选择路径。
+                selectedFiles = selectedFiles.map { url in moves.first { $0.renamed == url }?.original ?? url }
+                generatePreview()
+            case .failure(let errors):
+                errorMessage = "撤销失败：\n" + errors.joined(separator: "\n")
             }
         }
     }

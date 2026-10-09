@@ -7,6 +7,7 @@ struct HomeView: View {
     @State private var recentTools: [NavItem] = []
     @AppStorage("favoriteTools.v1") private var favoriteStorage = ""
     private var favorites: Set<String> { Set(favoriteStorage.split(separator: "|").map(String.init)) }
+    private var favoriteEntries: [ToolCatalogEntry] { ToolCatalog.tools.filter { favorites.contains($0.id) } }
     private var filtered: [ToolCatalogEntry] { ToolCatalog.search(search) }
     var body: some View {
         GeometryReader { geometry in
@@ -28,7 +29,7 @@ struct HomeView: View {
                         }.padding(16).background(AppColors.cardBackground, in: RoundedRectangle(cornerRadius: 10))
                     }.buttonStyle(.plain)
                     if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        if !favorites.isEmpty { toolSection("收藏工具", entries: ToolCatalog.tools.filter { favorites.contains($0.id) }) }
+                        if !favoriteEntries.isEmpty { toolSection("收藏工具", entries: favoriteEntries) }
                         if !recentTools.isEmpty {
                             HStack(spacing: 10) {
                                 Text("最近使用").font(.callout).foregroundStyle(AppColors.textSecondary)

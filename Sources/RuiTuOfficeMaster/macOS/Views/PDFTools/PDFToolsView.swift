@@ -37,17 +37,24 @@ struct PDFToolsView: View {
 
                 // 工具选择器
                 toolPickerSection
-                    .disabled(viewModel.isProcessing)
+                    .disabled(viewModel.isBusy)
 
                 // 第一步：选择文件
                 fileSelectionSection
-                    .disabled(viewModel.isProcessing)
+                    .disabled(viewModel.isBusy)
 
                 // 配置 + 执行
                 if !viewModel.selectedFiles.isEmpty {
+                    if viewModel.selectedTool == .split {
+                        PDFSplitPreviewView(viewModel: viewModel)
+                    }
                     configSection
-                    .disabled(viewModel.isProcessing)
+                    .disabled(viewModel.isBusy)
                     executeSection
+
+                    if !viewModel.entries.isEmpty {
+                        fileStatusSection
+                    }
 
                     if !viewModel.results.isEmpty {
                         resultsSection
@@ -57,6 +64,7 @@ struct PDFToolsView: View {
             }
             .padding(.horizontal, 32)
             .frame(maxWidth: 900)
+            .frame(maxWidth: .infinity)
         }
 
         privacyNotice
@@ -135,7 +143,7 @@ struct PDFToolsView: View {
                     .buttonStyle(.bordered)
 
                     if !viewModel.selectedFiles.isEmpty {
-                        Button(action: { viewModel = PDFToolsViewModel() }) {
+                        Button(action: { viewModel.clearFiles() }) {
                             Label("清空列表", systemImage: "trash")
                                 .font(.system(size: 13, weight: .medium))
                         }
@@ -202,8 +210,16 @@ struct PDFToolsView: View {
                 .font(.system(size: 13))
                 .foregroundColor(AppColors.textPrimary)
                 .lineLimit(1)
+                .help(url.path)
 
             Spacer()
+
+            if viewModel.selectedTool == .split, viewModel.splitPreview.selectedURL == url {
+                Text(viewModel.splitPreview.pageCount.map { "共 \($0) 页" }
+                     ?? (viewModel.splitPreview.isLoadingDocument ? "读取页数中…" : "页数不可读"))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(AppColors.primary)
+            }
 
             Text(FileUtils.formatSize(viewModel.originalSizes[url] ?? 0))
                 .font(.system(size: 11))
@@ -303,14 +319,32 @@ struct PDFToolsView: View {
                 .font(.system(size: 11))
                 .foregroundColor(AppColors.textSecondary.opacity(0.7))
 
-            if !viewModel.splitRangesText.isEmpty {
-                let ranges = viewModel.parsePageRangesForDisplay
-                if !ranges.isEmpty {
-                    Text("将生成 \(ranges.count) 个文件：\(ranges.joined(separator: "、"))")
-                        .font(.system(size: 12))
-                        .foregroundColor(AppColors.success)
+            if let error = viewModel.splitRangeError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12)).foregroundColor(AppColors.error)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if viewModel.splitRangesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("请输入要拆分的页码范围；每个逗号分隔的范围会生成一份 PDF。")
+                    .font(.system(size: 12)).foregroundColor(AppColors.textSecondary)
+            } else if !viewModel.parsePageRangesForDisplay.isEmpty {
+                Text("将生成 \(viewModel.splitPreviewRanges.count) 个文件，共 \(viewModel.splitOutputPageCount) 页（重叠范围分别计数）")
+                    .font(.system(size: 12)).foregroundColor(AppColors.success)
+                ViewThatFits(in: .horizontal) {
+                    HStack { splitRangeButtons }
+                    VStack(alignment: .leading) { splitRangeButtons }
                 }
             }
+
+        }
+    }
+
+    private var splitRangeButtons: some View {
+        ForEach(Array(viewModel.splitPreviewRanges.enumerated()), id: \.offset) { index, range in
+            Button("文件 \(index + 1)：第 \(range.start)" + (range.start == range.end ? " 页" : "–\(range.end) 页")) {
+                viewModel.splitPreview.goToPage(range.start)
+            }
+            .buttonStyle(.bordered)
+            .help("预览这个范围的第一页")
         }
     }
 
@@ -350,6 +384,10 @@ struct PDFToolsView: View {
             Text("用户密码用于打开 PDF 文件，所有者密码用于限制打印/复制等权限")
                 .font(.system(size: 11))
                 .foregroundColor(AppColors.textSecondary.opacity(0.7))
+            if !viewModel.userPassword.isEmpty, viewModel.userPassword == viewModel.ownerPassword {
+                Text("打开密码与权限密码不能相同")
+                    .font(.caption).foregroundStyle(AppColors.error)
+            }
         }
     }
 
@@ -484,6 +522,17 @@ struct PDFToolsView: View {
                 )
 
                 if viewModel.isProcessing {
+                    Button(viewModel.cancellationRequested ? "正在停止…" : "停止处理") {
+                        viewModel.stopProcessing()
+                    }
+                    .disabled(viewModel.cancellationRequested)
+                    Text(viewModel.isMergeBatch
+                         ? "合并会在页面之间检查停止请求；最终写入时需等待写入完成。"
+                         : "停止后不再处理后续项；当前文件或拆分范围完成后保留结果。")
+                        .font(.caption).foregroundStyle(AppColors.textSecondary)
+                }
+
+                if viewModel.isProcessing {
                     ProgressBar(
                         progress: $viewModel.progress,
                         currentFile: viewModel.currentFileName
@@ -492,15 +541,16 @@ struct PDFToolsView: View {
 
                 // 消息提示
                 if let msg = viewModel.successMessage {
-                    Label(msg, systemImage: "checkmark.circle.fill")
+                    Label(msg, systemImage: viewModel.wasStopped ? "stop.circle" : (viewModel.failedCount > 0 ? "info.circle" : "checkmark.circle.fill"))
                         .font(.system(size: 13))
-                        .foregroundColor(AppColors.success)
+                        .foregroundColor(viewModel.wasStopped || viewModel.failedCount > 0 || viewModel.unfinishedCount > 0 ? .orange : AppColors.success)
                         .padding(.top, 4)
                 }
                 if let msg = viewModel.errorMessage {
                     Label(msg, systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 13))
                         .foregroundColor(AppColors.error)
+                        .textSelection(.enabled)
                         .padding(.top, 4)
                 }
             }
@@ -517,6 +567,59 @@ struct PDFToolsView: View {
 
     // MARK: - 结果区域
 
+    private var fileStatusSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(viewModel.isMergeBatch ? "源文件状态" : "处理状态").font(.headline)
+                Spacer()
+                if viewModel.canRetry {
+                    Button(viewModel.isMergeBatch ? "重新尝试合并" : "重试失败／未完成项（\(viewModel.retryCount)）") {
+                        viewModel.retryUnfinished()
+                    }.buttonStyle(.bordered)
+                }
+            }
+            Text(viewModel.batchSummary).font(.callout).foregroundStyle(AppColors.textSecondary)
+            if viewModel.isMergeBatch {
+                Text("所有源文件都有效才会合并；失败后修复源文件并整组重试，不会跳过文件。")
+                    .font(.caption).foregroundStyle(AppColors.textSecondary)
+            } else if viewModel.selectedTool == .split {
+                Text("每个页码范围生成一个文件；重试会保留已成功的范围。")
+                    .font(.caption).foregroundStyle(AppColors.textSecondary)
+            }
+            LazyVStack(alignment: .leading, spacing: 12) {
+                ForEach(viewModel.entries) { entry in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .top) {
+                            Text(entry.title).textSelection(.enabled).help(entry.sourceURL.path)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text(entry.state.rawValue)
+                                .foregroundStyle(statusColor(entry.state))
+                            if viewModel.canRetry, !viewModel.isMergeBatch, entry.state.canRetry {
+                                Button("重试此项") { viewModel.retryEntry(entry.id) }
+                                    .help("重试：\(entry.title)")
+                            }
+                        }.font(.callout)
+                        if let error = entry.error {
+                            Text(error).font(.caption).foregroundStyle(AppColors.error).textSelection(.enabled)
+                        }
+                    }
+                    if entry.id != viewModel.entries.last?.id { Divider() }
+                }
+            }
+        }
+        .padding(16).background(AppColors.cardBackground).cornerRadius(10)
+    }
+
+    private func statusColor(_ state: PDFEntryState) -> Color {
+        switch state {
+        case .succeeded: AppColors.success
+        case .failed: AppColors.error
+        case .processing: AppColors.primary
+        case .ready, .blocked: .orange
+        case .waiting, .stopped: AppColors.textSecondary
+        }
+    }
+
     private var resultsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -525,10 +628,11 @@ struct PDFToolsView: View {
                     .foregroundColor(AppColors.textPrimary)
                 Spacer()
                 Button(action: { viewModel.saveResults() }) {
-                    Label("保存到...", systemImage: "folder")
+                    Label(viewModel.isSaving ? "正在保存…" : "保存到...", systemImage: "folder")
                         .font(.system(size: 13, weight: .medium))
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(viewModel.isBusy)
             }
 
             VStack(spacing: 0) {
@@ -543,7 +647,7 @@ struct PDFToolsView: View {
                     Text("处理后")
                         .frame(width: 80, alignment: .trailing)
                     Text("变化")
-                        .frame(width: 60, alignment: .trailing)
+                        .frame(width: 80, alignment: .trailing)
                 }
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(AppColors.textSecondary)
@@ -553,7 +657,7 @@ struct PDFToolsView: View {
 
                 Divider()
 
-                ForEach(viewModel.results, id: \.originalURL) { item in
+                ForEach(viewModel.results) { item in
                     resultRow(item: item)
                     if item.outputURL != viewModel.results.last?.outputURL {
                         Divider().padding(.leading, 12)
@@ -575,6 +679,7 @@ struct PDFToolsView: View {
                 .font(.system(size: 13))
                 .foregroundColor(AppColors.textPrimary)
                 .lineLimit(1)
+                .help("来源：\(item.originalURL.path)\n结果：\(item.outputURL.path)")
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(item.operationDescription)
@@ -596,10 +701,10 @@ struct PDFToolsView: View {
                 .foregroundColor(AppColors.textPrimary)
                 .frame(width: 80, alignment: .trailing)
 
-            Text("-\(item.savedPercent)%")
+            Text(item.changeText)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(AppColors.success)
-                .frame(width: 60, alignment: .trailing)
+                .foregroundColor(item.changePercent >= 0 ? AppColors.success : .orange)
+                .frame(width: 80, alignment: .trailing)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -639,11 +744,7 @@ struct PDFToolsView: View {
     }
 
     private func removeFileSafely(url: URL) {
-        if viewModel.selectedFiles.count == 1 {
-            viewModel = PDFToolsViewModel()
-        } else {
-            viewModel.removeFile(url: url)
-        }
+        viewModel.removeFile(url: url)
     }
 
     private func handleDrop(providers: [NSItemProvider]) {

@@ -1,7 +1,6 @@
 import Foundation
 import SwiftUI
 import AppKit
-import NaturalLanguage
 import UniformTypeIdentifiers
 
 #if canImport(Translation)
@@ -53,11 +52,22 @@ final class OCRViewModel: @unchecked Sendable {
 
     // MARK: 识别结果
 
-    var recognizedText: String = ""
+    var recognizedText: String = "" {
+        didSet {
+            if oldValue != recognizedText {
+                invalidateTranslation()
+                translatedText = ""
+            }
+        }
+    }
+    var imageResults: [OCRImageResult] = []
+    var isExportingTexts = false
     var errorMessage: String?
     var successMessage: String?
 
-    var hasResult: Bool { !recognizedText.isEmpty }
+    var hasResult: Bool { !imageResults.isEmpty || !recognizedText.isEmpty }
+    var hasText: Bool { imageResults.isEmpty ? !recognizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : imageResults.contains(where: \.hasText) }
+    var allResultText: String { imageResults.isEmpty ? recognizedText : OCRImageResult.combinedText(imageResults) }
 
     // MARK: 翻译（macOS 15.0+，通过 View 的 .translationTask() 桥接）
 
@@ -68,9 +78,8 @@ final class OCRViewModel: @unchecked Sendable {
 
     // 桥接：避免直接引用 TranslationSession 类型
     private var _translationSession: Any? = nil
-    private var _translationContinuation: CheckedContinuation<Void, Never>? = nil
-    private var _translationContinuationResumed = false
-    private var _pendingTranslation = false
+    private var translationRevision = UUID()
+    private var translationTask: Task<Void, Never>?
 
     @available(macOS 15.0, *)
     private var translationSession: TranslationSession? {
@@ -80,33 +89,19 @@ final class OCRViewModel: @unchecked Sendable {
 
     /// 由 View 的 .translationTask() 调用，注入 TranslationSession
     @available(macOS 15.0, *)
+    @MainActor
     func setTranslationSession(_ session: TranslationSession) {
         translationSession = session
-        guard !_translationContinuationResumed else { return }
-        _translationContinuationResumed = true
-        _translationContinuation?.resume()
-        _translationContinuation = nil
     }
 
-    /// 等待 TranslationSession 就绪（若已就绪则立即返回）
+    /// 等待 View 注入服务，取消或切换文件时及时退出。
     @available(macOS 15.0, *)
+    @MainActor
     private func waitForTranslationSession() async {
-        if translationSession != nil { return }
-        _translationContinuationResumed = false
-        // 5秒超时保护，防止永久挂起
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak self] in
-            guard let self, !self._translationContinuationResumed else { return }
-            self._translationContinuationResumed = true
-            self._translationContinuation?.resume()
-            self._translationContinuation = nil
-        }
-        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            if _translationContinuationResumed {
-                // 超时已先触发，立即恢复
-                c.resume()
-            } else {
-                _translationContinuation = c
-            }
+        for _ in 0..<20 {
+            if translationSession != nil || Task.isCancelled { return }
+            do { try await Task.sleep(for: .milliseconds(250)) }
+            catch { return }
         }
     }
 
@@ -195,14 +190,18 @@ final class OCRViewModel: @unchecked Sendable {
             panel.title = "选择 PDF 文档"
         }
 
-        if panel.runModal() == .OK {
-            switch importMode {
+        let mode = importMode
+        panel.begin { [weak self] response in
+            guard response == .OK else { return }
+            let urls = panel.urls
+            guard let self, !self.isProcessing, self.importMode == mode else { return }
+            switch mode {
             case .singleImage:
-                if let url = panel.urls.first { setSingleImage(url) }
+                if let url = urls.first { self.setSingleImage(url) }
             case .batchImages:
-                addImages(from: panel.urls)
+                self.addImages(from: urls)
             case .pdf:
-                if let url = panel.urls.first { setPDF(url) }
+                if let url = urls.first { self.setPDF(url) }
             }
         }
     }
@@ -217,7 +216,7 @@ final class OCRViewModel: @unchecked Sendable {
         if type.conforms(to: .pdf) {
             importMode = .pdf
             setPDF(url)
-        } else if OCRService.supportedFormats.contains { type.conforms(to: $0) } {
+        } else if OCRService.supportedFormats.contains(where: { type.conforms(to: $0) }) {
             switch importMode {
             case .singleImage:
                 setSingleImage(url)
@@ -236,8 +235,7 @@ final class OCRViewModel: @unchecked Sendable {
         selectedImages = []
         selectedPDF = nil
         fileSizes = [url: FileUtils.fileSize(of: url)]
-        recognizedText = ""
-        translatedText = ""
+        resetResults()
         clearMessages()
     }
 
@@ -255,8 +253,7 @@ final class OCRViewModel: @unchecked Sendable {
         }
         selectedImage = nil
         selectedPDF = nil
-        recognizedText = ""
-        translatedText = ""
+        resetResults()
         clearMessages()
     }
 
@@ -265,8 +262,7 @@ final class OCRViewModel: @unchecked Sendable {
         selectedImage = nil
         selectedImages = []
         fileSizes = [url: FileUtils.fileSize(of: url)]
-        recognizedText = ""
-        translatedText = ""
+        resetResults()
         clearMessages()
     }
 
@@ -275,6 +271,8 @@ final class OCRViewModel: @unchecked Sendable {
         guard !isProcessing else { return }
         selectedImages.removeAll { $0 == url }
         fileSizes.removeValue(forKey: url)
+        resetResults()
+        clearMessages()
     }
 
     /// 清空所有文件和结果
@@ -284,8 +282,7 @@ final class OCRViewModel: @unchecked Sendable {
         selectedImages = []
         selectedPDF = nil
         fileSizes = [:]
-        recognizedText = ""
-        translatedText = ""
+        resetResults()
         clearMessages()
     }
 
@@ -300,7 +297,7 @@ final class OCRViewModel: @unchecked Sendable {
         progressDetail = ""
         errorMessage = nil
         successMessage = nil
-        translatedText = ""
+        resetResults()
 
         let languages = selectedLanguages
         let preprocess = enablePreprocess
@@ -359,7 +356,7 @@ final class OCRViewModel: @unchecked Sendable {
 
         Task(priority: .userInitiated) {
             do {
-                let text = try await service.recognizeBatch(
+                let results = try await service.recognizeBatchResults(
                     urls: urls,
                     languages: languages,
                     preprocess: preprocess
@@ -372,16 +369,19 @@ final class OCRViewModel: @unchecked Sendable {
                 }
 
                 await MainActor.run {
-                    self.recognizedText = text
+                    self.imageResults = results
                     self.progress = 1.0
                     self.isProcessing = false
-                    self.successMessage = "批量识别完成，共处理 \(urls.count) 张图片"
+                    let recognized = results.filter { $0.status == .recognized }.count
+                    let blank = results.filter { $0.status == .noText }.count
+                    let failed = results.count - recognized - blank
+                    self.successMessage = "识别完成：\(recognized) 张有文字，\(blank) 张无文字，\(failed) 张失败"
                     HistoryService().addRecord(
                         toolName: "OCR 文字识别",
                         operationType: "批量图片识别",
                         fileCount: urls.count,
                         inputFileNames: urls.map { $0.lastPathComponent },
-                        status: "成功",
+                        status: failed == 0 ? "成功" : (failed == urls.count ? "失败" : "部分成功"),
                         inputSize: urls.reduce(0) { $0 + (fileSizes[$1] ?? 0) },
                         outputSize: 0,
                         descriptionText: "批量识别 \(urls.count) 张图片"
@@ -448,127 +448,181 @@ final class OCRViewModel: @unchecked Sendable {
 
     // MARK: 结果操作
 
-    /// 一键规整排版
+    func setImageText(id: UUID, text: String) {
+        guard let index = imageResults.firstIndex(where: { $0.id == id }), imageResults[index].text != text else { return }
+        invalidateTranslation()
+        imageResults[index].text = text
+        imageResults[index].translatedText = ""
+    }
+
+    func setImageTranslation(id: UUID, text: String) {
+        guard let index = imageResults.firstIndex(where: { $0.id == id }) else { return }
+        imageResults[index].translatedText = text
+    }
+
+    /// 每张图片独立排版，避免跨图片合并段落。
     func reformatText() {
-        guard hasResult else { return }
-        recognizedText = OCRService.reformatText(recognizedText)
+        guard hasText else { return }
+        if imageResults.isEmpty {
+            recognizedText = OCRService.reformatText(recognizedText)
+        } else {
+            for result in imageResults {
+                setImageText(id: result.id, text: OCRService.reformatText(result.text))
+            }
+        }
         successMessage = "排版规整完成"
     }
 
-    /// 一键复制
-    func copyAllText() {
+    func copyAllText() { copyText(allResultText) }
+
+    func copyText(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(recognizedText, forType: .string)
+        pasteboard.setString(text, forType: .string)
         successMessage = "已复制到剪贴板"
     }
 
-    /// 保存为 TXT
 #if os(macOS)
     @MainActor
-    func saveAsText() {
+    func saveAsText(resultID: UUID? = nil) {
+        let result = resultID.flatMap { id in imageResults.first(where: { $0.id == id }) }
+        let text = result?.text ?? allResultText
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.plainText]
-        panel.nameFieldStringValue = "OCR识别结果.txt"
-
-        if panel.runModal() == .OK, let url = panel.url {
+        panel.nameFieldStringValue = result.map { $0.sourceURL.deletingPathExtension().lastPathComponent + "_识别结果.txt" } ?? "OCR识别结果.txt"
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
             do {
-                try recognizedText.write(to: url, atomically: true, encoding: .utf8)
-                successMessage = "已保存为 TXT 文件"
-            } catch {
-                errorMessage = "保存失败: \(error.localizedDescription)"
-            }
+                try text.write(to: url, atomically: true, encoding: .utf8)
+                self.successMessage = "已保存为 TXT 文件"
+            } catch { self.errorMessage = "保存失败: \(error.localizedDescription)" }
         }
     }
-#endif
 
-    /// 导出为 Word 兼容格式（RTF）
-    #if os(macOS)
+    @MainActor
+    func saveSeparateTexts() {
+        guard !isExportingTexts, imageResults.contains(where: \.hasText) else { return }
+        let snapshot = imageResults
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "保存到这里"
+        panel.title = "分别导出图片识别文字"
+        panel.message = "每张图片生成一个 TXT，保留图片文件名及扩展名；重名文件自动编号，无文字图片跳过。"
+        isExportingTexts = true
+        Task { @MainActor in
+            defer { isExportingTexts = false }
+            guard await FileDialogs.response(to: panel) == .OK, let directory = panel.url else { return }
+            let report = await Task.detached(priority: .userInitiated) {
+                OCRTextExporter.export(snapshot, to: directory)
+            }.value
+            successMessage = report.savedURLs.isEmpty ? nil : report.message
+            errorMessage = report.errors.isEmpty ? nil : report.errors.joined(separator: "\n")
+        }
+    }
+
     @MainActor
     func exportAsWord() {
         guard hasResult else { return }
-
+        let text = allResultText
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.rtf]
         panel.nameFieldStringValue = "OCR识别结果.rtf"
         panel.title = "导出为 Word 兼容文档"
-
-        if panel.runModal() == .OK, let url = panel.url {
-            guard let rtfData = OCRService.exportAsRTF(recognizedText) else {
-                errorMessage = "生成文档失败"
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            guard let data = OCRService.exportAsRTF(text) else {
+                self.errorMessage = "生成文档失败"
                 return
             }
             do {
-                try rtfData.write(to: url)
-                successMessage = "已导出为 Word 兼容文档（RTF 格式）"
-            } catch {
-                errorMessage = "导出失败: \(error.localizedDescription)"
-            }
+                try data.write(to: url, options: .atomic)
+                self.successMessage = "已导出为 Word 兼容文档（RTF 格式）"
+            } catch { self.errorMessage = "导出失败: \(error.localizedDescription)" }
         }
     }
-    #endif
+#endif
 
-    /// 触发翻译（通过 View 的 .translationTask() 桥接，macOS 15.0+）
     @MainActor
     func triggerTranslation() {
-        guard hasResult, !isTranslating else { return }
+        guard hasText, !isTranslating else { return }
         isTranslating = true
-        _pendingTranslation = true
+        let revision = UUID()
+        translationRevision = revision
+        let inputs: [(id: String, text: String)] = imageResults.isEmpty
+            ? [("single", recognizedText)]
+            : imageResults.filter(\.hasText).map { ($0.id.uuidString, $0.text) }
         if #available(macOS 15.0, *) {
-            Task { await performTranslation() }
+            translationTask = Task { await performTranslation(inputs: inputs, revision: revision) }
         } else {
             isTranslating = false
             errorMessage = "翻译功能需要 macOS 15.0 或更高版本"
         }
     }
 
-    /// 执行翻译（异步等待 TranslationSession 就绪后调用）
     @available(macOS 15.0, *)
-    private func performTranslation() async {
-        guard _pendingTranslation else { return }
+    @MainActor
+    private func performTranslation(inputs: [(id: String, text: String)], revision: UUID) async {
         await waitForTranslationSession()
-        guard let session = translationSession, _pendingTranslation else {
-            await MainActor.run { isTranslating = false }
+        guard translationRevision == revision, !Task.isCancelled else { return }
+        guard translationSession != nil else {
+            isTranslating = false
+            errorMessage = "翻译服务尚未就绪，请重试"
             return
         }
-
-        _pendingTranslation = false
-
-        // 检测源语言
-        let recognizer = NLLanguageRecognizer()
-        recognizer.processString(recognizedText)
-        let dominantLang = recognizer.dominantLanguage
-
-        let requests: [TranslationSession.Request]
-        if let lang = dominantLang {
-            let source = Locale.Language(identifier: lang.rawValue)
-            requests = [TranslationSession.Request(sourceText: recognizedText,
-                                                     clientIdentifier: "ocr-\(source.maximalIdentifier)")]
-        } else {
-            requests = [TranslationSession.Request(sourceText: recognizedText,
-                                                     clientIdentifier: "ocr-auto")]
-        }
-
         do {
-            let response = try await session.translations(from: requests)
-            if let first = response.first {
-                await MainActor.run {
-                    translatedText = first.targetText
-                    isTranslating = false
-                    successMessage = "翻译完成"
-                }
-            } else {
-                await MainActor.run {
-                    isTranslating = false
-                    errorMessage = "翻译失败，请重试"
-                }
+            let responses = try await translateInputs(inputs)
+            guard translationRevision == revision, !Task.isCancelled else { return }
+            // 依据稳定标识匹配，不依赖返回顺序或同名文件。
+            let translations = responses.compactMap { response -> (String, String)? in
+                guard let id = response.clientIdentifier else { return nil }
+                return (id, response.targetText)
             }
+            applyTranslations(translations, inputs: inputs)
+            isTranslating = false
+            if translations.count == inputs.count {
+                successMessage = "翻译完成"
+            } else { errorMessage = "部分译文未返回，请重试" }
         } catch {
-            await MainActor.run {
-                isTranslating = false
-                errorMessage = "翻译失败: \(error.localizedDescription)"
+            guard translationRevision == revision, !Task.isCancelled else { return }
+            isTranslating = false
+            errorMessage = "翻译失败: \(error.localizedDescription)"
+        }
+    }
+
+    // SDK 15 的 Request 未声明 Sendable，在非隔离执行器中创建并交给翻译服务。
+    @available(macOS 15.0, *)
+    private func translateInputs(_ inputs: [(id: String, text: String)]) async throws -> [TranslationSession.Response] {
+        guard let session = translationSession else { return [] }
+        let requests = inputs.map { TranslationSession.Request(sourceText: $0.text, clientIdentifier: $0.id) }
+        return try await session.translations(from: requests)
+    }
+
+    /// 同时核对标识与原文快照，防止编辑后的文字收到旧译文。
+    func applyTranslations(_ translations: [(String, String)], inputs: [(id: String, text: String)]) {
+        for (id, translation) in translations {
+            guard let input = inputs.first(where: { $0.id == id }) else { continue }
+            if id == "single" {
+                if imageResults.isEmpty, recognizedText == input.text { translatedText = translation }
+            } else if let index = imageResults.firstIndex(where: { $0.id.uuidString == id }), imageResults[index].text == input.text {
+                imageResults[index].translatedText = translation
             }
         }
+    }
+
+    private func invalidateTranslation() {
+        translationRevision = UUID()
+        translationTask?.cancel()
+        translationTask = nil
+        isTranslating = false
+    }
+
+    private func resetResults() {
+        invalidateTranslation()
+        recognizedText = ""
+        translatedText = ""
+        imageResults = []
     }
 
     // MARK: 工具

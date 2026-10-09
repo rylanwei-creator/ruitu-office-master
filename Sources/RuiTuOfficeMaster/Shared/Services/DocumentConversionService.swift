@@ -33,7 +33,7 @@ enum DocumentConversionError: LocalizedError {
 
 // MARK: - 转换方向
 
-enum ConversionDirection: String, CaseIterable {
+enum ConversionDirection: String, CaseIterable, Sendable {
     case wordToPDF = "Word → PDF"
     case pdfToWord = "PDF → Word（提取文字）"
 }

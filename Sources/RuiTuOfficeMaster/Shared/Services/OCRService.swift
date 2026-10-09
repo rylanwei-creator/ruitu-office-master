@@ -264,38 +264,55 @@ struct OCRService {
 
     // MARK: 批量图片识别
 
-    /// 批量识别多张图片，文本自动拼接汇总
+    /// 批量识别保留来源，单张图片失败不会丢掉其他图片的结果。
+    func recognizeBatchResults(
+        urls: [URL],
+        languages: [String] = OCRService.defaultLanguages,
+        preprocess: Bool = true,
+        progressHandler: @escaping (Int, Int) -> Void
+    ) async throws -> [OCRImageResult] {
+        try await recognizeBatchResults(urls: urls, recognize: { url in
+            let image = try loadImage(from: url)
+            return try await recognizeText(from: image, languages: languages, preprocess: preprocess)
+        }, progressHandler: progressHandler)
+    }
+
+    /// 引擎边界独立，便于验证批处理的来源、顺序及单文件错误隔离。
+    func recognizeBatchResults(
+        urls: [URL],
+        recognize: (URL) async throws -> String,
+        progressHandler: @escaping (Int, Int) -> Void
+    ) async throws -> [OCRImageResult] {
+        var results: [OCRImageResult] = []
+        for (index, url) in urls.enumerated() {
+            try Task.checkCancellation()
+            progressHandler(index + 1, urls.count)
+            do {
+                let text = try await recognize(url)
+                results.append(OCRImageResult(sourceURL: url, text: text,
+                    status: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .noText : .recognized))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch OCRError.noTextFound {
+                results.append(OCRImageResult(sourceURL: url, text: "", status: .noText))
+            } catch {
+                results.append(OCRImageResult(sourceURL: url, text: "", status: .failed(error.localizedDescription)))
+            }
+        }
+        return results
+    }
+
+    /// 兼容需要汇总文本的调用方；界面使用结构化结果。
     func recognizeBatch(
         urls: [URL],
         languages: [String] = OCRService.defaultLanguages,
         preprocess: Bool = true,
         progressHandler: @escaping (Int, Int) -> Void
     ) async throws -> String {
-        var allText: [String] = []
-
-        for (index, url) in urls.enumerated() {
-            try Task.checkCancellation()
-            progressHandler(index + 1, urls.count)
-            do {
-                let image = try loadImage(from: url)
-                let text = try await recognizeText(
-                    from: image,
-                    languages: languages,
-                    preprocess: preprocess
-                )
-                if !text.isEmpty {
-                    let fileName = url.deletingPathExtension().lastPathComponent
-                    allText.append("--- \(fileName) ---\n\(text)")
-                }
-            } catch OCRError.noTextFound {
-                allText.append("--- \(url.lastPathComponent)（无文字） ---")
-            }
-        }
-
-        guard !allText.isEmpty else {
-            throw OCRError.noTextFound
-        }
-        return allText.joined(separator: "\n\n")
+        let results = try await recognizeBatchResults(urls: urls, languages: languages,
+            preprocess: preprocess, progressHandler: progressHandler)
+        guard !results.isEmpty else { throw OCRError.noTextFound }
+        return OCRImageResult.combinedText(results)
     }
 
     // MARK: 智能文本后处理

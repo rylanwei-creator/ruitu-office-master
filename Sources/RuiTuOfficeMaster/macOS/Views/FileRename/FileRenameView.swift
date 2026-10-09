@@ -10,53 +10,66 @@ struct FileRenameView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    // 页面标题
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 12) {
-                            if let logoPath = AppResources.bundle.path(forResource: "Logo", ofType: "png"),
-                               let nsImage = NSImage(contentsOfFile: logoPath) {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(width: 36, height: 36)
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        // 页面标题
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 12) {
+                                if let logoPath = AppResources.bundle.path(forResource: "Logo", ofType: "png"),
+                                   let nsImage = NSImage(contentsOfFile: logoPath) {
+                                    Image(nsImage: nsImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(width: 36, height: 36)
+                                }
+                                Text("文件改名")
+                                    .font(.system(size: 28, weight: .bold))
+                                    .foregroundColor(AppColors.textPrimary)
                             }
-                            Text("文件改名")
-                                .font(.system(size: 28, weight: .bold))
-                                .foregroundColor(AppColors.textPrimary)
+                            Text("批量修改文件名，支持添加前缀/后缀、查找替换、序号命名")
+                                .font(.system(size: 14))
+                                .foregroundColor(AppColors.textSecondary)
                         }
-                        Text("批量修改文件名，支持添加前缀/后缀、查找替换、序号命名")
-                            .font(.system(size: 14))
-                            .foregroundColor(AppColors.textSecondary)
-                    }
-                    .padding(.top, 24)
+                        .padding(.top, 24)
 
-                    // 第一步：选择文件
-                    fileSelectionSection
-                    .disabled(viewModel.isProcessing)
-
-                    // 已选文件列表
-                    if !viewModel.selectedFiles.isEmpty {
-                        selectedFileList
-                    }
-
-                    // 第二步：改名设置
-                    if !viewModel.selectedFiles.isEmpty {
-                        renameConfigSection
-                    .disabled(viewModel.isProcessing)
-
-                        // 第三步：预览
-                        if viewModel.hasPreview {
-                            previewSection
+                        // 结果独立于待处理列表，成功后清空选择也始终可见。
+                        if viewModel.hasOperationFeedback {
+                            operationFeedbackSection.id("rename-operation-result")
                         }
 
-                        // 第四步：执行
-                        executeSection
+                        // 第一步：选择文件
+                        fileSelectionSection
+                            .disabled(viewModel.isProcessing)
+
+                        // 已选文件列表
+                        if !viewModel.selectedFiles.isEmpty {
+                            selectedFileList.disabled(viewModel.isProcessing)
+                        }
+
+                        // 第二步：改名设置
+                        if !viewModel.selectedFiles.isEmpty {
+                            renameConfigSection
+                            .disabled(viewModel.isProcessing)
+
+                            // 第三步：预览
+                            if viewModel.hasPreview {
+                                previewSection
+                            }
+
+                            // 第四步：执行
+                            executeSection
+                        }
+                    }
+                    .padding(.horizontal, 32)
+                    .frame(maxWidth: 900)
+                }
+
+                .onChange(of: viewModel.isProcessing) { _, processing in
+                    if !processing && viewModel.hasOperationFeedback {
+                        withAnimation { scrollProxy.scrollTo("rename-operation-result", anchor: .top) }
                     }
                 }
-                .padding(.horizontal, 32)
-                .frame(maxWidth: 900)
             }
 
             // 隐私声明 — 固定在底部，不随内容滚动
@@ -101,7 +114,7 @@ struct FileRenameView: View {
                     .buttonStyle(.bordered)
 
                     if !viewModel.selectedFiles.isEmpty {
-                        Button(action: { viewModel = FileRenameViewModel() }) {
+                        Button(action: { viewModel.clearFiles() }) {
                             Label("清空列表", systemImage: "trash")
                                 .font(.system(size: 13, weight: .medium))
                         }
@@ -331,7 +344,7 @@ struct FileRenameView: View {
 
             // 冲突警告
             if viewModel.hasConflicts {
-                Label("\(viewModel.conflictCount) 个文件存在冲突（目标已存在或无权限），执行时将自动避让", systemImage: "exclamationmark.triangle.fill")
+                Label("\(viewModel.conflictCount) 个文件无法改名，请查看原因并调整后重试", systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 12))
                     .foregroundColor(.orange)
             }
@@ -409,17 +422,6 @@ struct FileRenameView: View {
 
     private var executeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // 进度条
-            if viewModel.isProcessing {
-                ProgressBar(
-                    progress: Binding(
-                        get: { viewModel.progress },
-                        set: { _ in }
-                    ),
-                    currentFile: viewModel.currentFileName
-                )
-            }
-
             // 执行按钮
             HStack(spacing: 12) {
                 Button(action: { viewModel.executeRename() }) {
@@ -429,23 +431,73 @@ struct FileRenameView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!viewModel.canExecute)
-                if viewModel.canUndo {
-                    Button("撤销上次改名", action: { viewModel.undoRename() }).buttonStyle(.bordered)
-                }
 
-                // 消息提示
-                if let msg = viewModel.successMessage {
-                    Label(msg, systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundColor(AppColors.success)
-                }
-                if let msg = viewModel.errorMessage {
-                    Label(msg, systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 13))
-                        .foregroundColor(AppColors.error)
-                }
             }
         }
+    }
+
+    // MARK: - 操作反馈（不依赖是否仍有待处理文件）
+
+    private var operationFeedbackSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("操作结果")
+                    .font(.system(size: 18, weight: .semibold))
+                Spacer()
+                if viewModel.canUndo {
+                    Button("撤销上次改名", action: { viewModel.undoRename() })
+                        .buttonStyle(.bordered)
+                }
+            }
+            if viewModel.isProcessing {
+                if viewModel.isUndoing {
+                    ProgressView("正在恢复原文件名…")
+                } else {
+                    ProgressBar(progress: Binding(get: { viewModel.progress }, set: { _ in }),
+                                currentFile: viewModel.currentFileName)
+                }
+            }
+            if let message = viewModel.successMessage {
+                Label(message, systemImage: "checkmark.circle.fill")
+                    .foregroundColor(AppColors.success)
+            }
+            if let message = viewModel.errorMessage {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(AppColors.error)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            if !viewModel.completedMoves.isEmpty {
+                Text(viewModel.didUndo ? "已撤销的改名记录（已恢复原文件名）" : "上次成功改名记录（原文件名 → 新文件名）")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppColors.textSecondary)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(viewModel.completedMoves.enumerated()), id: \.offset) { _, move in
+                            HStack(spacing: 12) {
+                                Text(move.original.lastPathComponent)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Image(systemName: "arrow.right")
+                                    .foregroundColor(AppColors.textSecondary)
+                                Text(move.renamed.lastPathComponent)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .textSelection(.enabled)
+                            .help("原路径：\(move.original.path)\n改名后路径：\(move.renamed.path)")
+                        }
+                    }
+                }
+                .frame(height: min(200, CGFloat(viewModel.completedMoves.count) * 36))
+                Text("撤销适用于当前页面上次成功的一批改名；文件被移动或修改后可能无法撤销。")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppColors.textSecondary)
+            }
+        }
+        .font(.system(size: 13))
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColors.cardBackground)
+        .cornerRadius(12)
     }
 
     // MARK: - 拖拽处理
