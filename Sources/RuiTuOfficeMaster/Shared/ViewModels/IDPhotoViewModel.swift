@@ -13,15 +13,26 @@ final class IDPhotoViewModel {
     private(set) var isExporting = false
     var errorMessage: String?
     var saveMessage: String?
-    var paper: IDPhotoPaper = .sixInch
-    var cropMarks = true
+    var paper: IDPhotoPaper = .sixInch { didSet { if oldValue != paper { refreshPrintPreview() } } }
+    var cropMarks = true { didSet { if oldValue != cropMarks { refreshPrintPreview() } } }
+    private(set) var printPreview: IDPhotoPrintPreview?
+    private(set) var isPrintPreviewRendering = false
+    private(set) var printPreviewError: String?
+    private var printGeneration = UUID()
+    private var printTask: Task<Void, Never>?
     var showGuides = true
     private var preparedEditor: CGImage?
     private var quarterTurns = 0
     private var generation = UUID()
     private var task: Task<Void, Never>?
-    var busy: Bool { isLoading || isRendering || isExporting }
-    var canExport: Bool { result?.settings == settings && result != nil && !busy }
+    var busy: Bool { isLoading || isRendering || isExporting || isPrintPreviewRendering }
+    var canExport: Bool { result?.settings == settings && result != nil && !isLoading && !isRendering && !isExporting }
+    var currentPrintPreview: IDPhotoPrintPreview? {
+        guard result?.settings == settings, let printPreview, printPreview.settings == settings,
+              printPreview.paper == paper, printPreview.cropMarks == cropMarks else { return nil }
+        return printPreview
+    }
+    var canExportPrint: Bool { canExport && currentPrintPreview != nil && !isPrintPreviewRendering }
     var editorImage: CGImage? { preparedEditor ?? asset?.image }
     var faceMessage: String {
         guard let asset else { return "" }
@@ -46,6 +57,7 @@ final class IDPhotoViewModel {
     func load(_ url: URL, rotate: Bool = false) {
         guard !isExporting else { return }
         task?.cancel(); generation = UUID()
+        invalidatePrintPreview()
         let token = generation
         if !rotate { quarterTurns = 0; settings.crop = IDPhotoCrop() }
         sourceURL = url; asset = nil; result = nil; preparedEditor = nil
@@ -78,6 +90,7 @@ final class IDPhotoViewModel {
     func clear() {
         guard !isExporting else { return }
         task?.cancel(); generation = UUID()
+        invalidatePrintPreview()
         sourceURL = nil; asset = nil; result = nil; preparedEditor = nil
         isLoading = false; isRendering = false; activity()
         errorMessage = nil; saveMessage = nil
@@ -85,6 +98,7 @@ final class IDPhotoViewModel {
     }
     func cancel() {
         task?.cancel(); generation = UUID()
+        invalidatePrintPreview()
         isLoading = false; isRendering = false; activity()
         errorMessage = nil
         if result == nil { saveMessage = "已停止；调整设置或点击“更新预览”继续。" }
@@ -98,6 +112,7 @@ final class IDPhotoViewModel {
     func refresh() {
         guard let asset, !isLoading, !isExporting else { return }
         task?.cancel(); generation = UUID()
+        invalidatePrintPreview()
         let token = generation, snapshot = settings
         result = nil; errorMessage = nil; saveMessage = nil
         do { try snapshot.validate() }
@@ -113,7 +128,9 @@ final class IDPhotoViewModel {
                 guard token == generation, !Task.isCancelled, snapshot == settings else { return }
                 result = output
                 preparedEditor = output.editorImage
-                isRendering = false; activity()
+                isRendering = false
+                refreshPrintPreview()
+                activity()
             } catch {
                 guard token == generation else { return }
                 isRendering = false; activity()
@@ -121,10 +138,40 @@ final class IDPhotoViewModel {
             }
         }
     }
+    private func invalidatePrintPreview() {
+        printTask?.cancel(); printGeneration = UUID()
+        printPreview = nil; printPreviewError = nil; isPrintPreviewRendering = false
+    }
+    func refreshPrintPreview() {
+        guard !isExporting else { return }
+        invalidatePrintPreview()
+        guard let result, result.settings == settings, !isLoading, !isRendering else { activity(); return }
+        let token = printGeneration, paper = paper, marks = cropMarks
+        isPrintPreviewRendering = true; activity()
+        printTask = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(120))
+                let worker = Task.detached(priority: .userInitiated) {
+                    try IDPhotoService.printPreview(result: result, paper: paper, cropMarks: marks)
+                }
+                let output = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                guard token == printGeneration, !Task.isCancelled, result.settings == settings,
+                      paper == self.paper, marks == cropMarks else { return }
+                printPreview = output; isPrintPreviewRendering = false; activity()
+            } catch {
+                guard token == printGeneration else { return }
+                isPrintPreviewRendering = false; activity()
+                if !(error is CancellationError) { printPreviewError = error.localizedDescription }
+            }
+        }
+    }
     func export(printSheet: Bool) {
         guard canExport, let result, let sourceURL else { return }
+        guard !printSheet || canExportPrint else { return }
+        // 捕获预览所用的 PDF；保存不重新排版，避免参数变化与预览不一致。
+        let exportData = printSheet ? currentPrintPreview?.data : result.data
+        guard let exportData else { return }
         isExporting = true; activity(); errorMessage = nil; saveMessage = nil
-        let paper = paper, marks = cropMarks
         Task {
             defer { isExporting = false; activity() }
             do {
@@ -135,8 +182,7 @@ final class IDPhotoViewModel {
                         let suffix = printSheet ? "证件照排版" : "证件照"
                         let base = String(sourceURL.deletingPathExtension().lastPathComponent.prefix(80))
                         let url = directory.appendingPathComponent("\(base)_\(suffix).\(ext)")
-                        let data = printSheet ? try IDPhotoService.printPDF(result: result, paper: paper, cropMarks: marks) : result.data
-                        try data.write(to: url, options: .atomic)
+                        try exportData.write(to: url, options: .atomic)
                         return url
                     } catch { try? FileManager.default.removeItem(at: directory); throw error }
                 }.value

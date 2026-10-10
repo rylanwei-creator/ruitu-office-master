@@ -38,7 +38,7 @@ app = Path(sys.argv[1])
 info = {
     'CFBundleName': 'RuiTuOfficeMaster', 'CFBundleDisplayName': '锐途办公大师',
     'CFBundleIdentifier': 'com.ruitu.officemaster', 'CFBundleExecutable': 'RuiTuOfficeMaster',
-    'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '1.4.1', 'CFBundleVersion': '16',
+    'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '1.5.2', 'CFBundleVersion': '19',
     'CFBundleIconFile': 'AppIcon', 'LSMinimumSystemVersion': '14.0', 'NSHighResolutionCapable': True,
     'NSSpeechRecognitionUsageDescription': '使用系统本地语音识别，将你选择的音视频文件转成文字。'
 }
@@ -48,7 +48,7 @@ codesign --force --deep --sign - --options runtime "$STAGE"
 codesign --verify --deep --strict "$STAGE"
 rm -rf "$APP"
 mv "$STAGE" "$APP"
-ZIP="$RELEASE_DIR/锐途办公大师_1.4.1_macOS.zip"
+ZIP="$RELEASE_DIR/锐途办公大师_1.5.2_macOS.zip"
 rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 file "$APP/Contents/MacOS/RuiTuOfficeMaster"

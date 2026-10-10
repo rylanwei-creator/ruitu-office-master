@@ -14,6 +14,9 @@ struct ContentView: View {
                 HomeView(selectedNav: $selectedNav)
                     .pageVisible(selectedNav == .home)
 
+                FileOrganizerView()
+                    .pageVisible(selectedNav == .fileOrganizer)
+
                 FileRenameView()
                     .pageVisible(selectedNav == .fileRename)
 

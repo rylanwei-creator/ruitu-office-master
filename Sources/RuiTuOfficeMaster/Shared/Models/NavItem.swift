@@ -4,6 +4,7 @@ import SwiftUI
 enum NavItem: String, CaseIterable, Identifiable {
     case home = "首页"
     case fileRename = "文件改名"
+    case fileOrganizer = "文件整理"
     case imageProcessing = "图片处理"
     case cutout = "抠图"
     case imageWatermark = "图片去水印"
@@ -24,6 +25,7 @@ enum NavItem: String, CaseIterable, Identifiable {
         switch self {
         case .home: return "house"
         case .fileRename: return "pencil"
+        case .fileOrganizer: return "folder.badge.gearshape"
         case .imageProcessing: return "photo"
         case .cutout: return "person.crop.rectangle.badge.plus"
         case .imageWatermark: return "eraser"

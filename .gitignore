@@ -3,3 +3,4 @@
 .swiftpm/
 release/
 *.dmg
+backups/

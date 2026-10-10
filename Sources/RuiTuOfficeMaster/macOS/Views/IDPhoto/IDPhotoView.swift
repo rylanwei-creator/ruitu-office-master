@@ -5,6 +5,7 @@ struct IDPhotoView: View {
     @State private var model = IDPhotoViewModel()
     @State private var dropTargeted = false
     @State private var dragStart: IDPhotoCrop?
+    @State private var enlargedPrintPreview: IDPhotoPrintPreview?
 
     var body: some View {
         ScrollView {
@@ -42,6 +43,20 @@ struct IDPhotoView: View {
         }
         .background(AppColors.background)
         .onChange(of: model.settings) { _, _ in model.refresh() }
+        .sheet(isPresented: Binding(get: { enlargedPrintPreview != nil }, set: { if !$0 { enlargedPrintPreview = nil } })) {
+            if let preview = enlargedPrintPreview {
+                VStack(spacing: 16) {
+                    HStack {
+                        Text("打印排版预览 · \(preview.paper.rawValue)").font(.headline)
+                        Spacer()
+                        Button("关闭") { enlargedPrintPreview = nil }.keyboardShortcut(.cancelAction)
+                    }
+                    printPage(preview.image).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Text("每页 \(preview.photoCount) 张 · 照片 \(mmText(preview.settings.millimeters)) mm · 屏幕为缩放预览")
+                        .font(.caption).foregroundStyle(AppColors.textSecondary)
+                }.padding(24).frame(width: 800, height: 740)
+            }
+        }
     }
     private var selection: some View {
         HStack(spacing: 16) {
@@ -225,15 +240,52 @@ struct IDPhotoView: View {
                 }.frame(maxWidth: 320)
                 Toggle("裁切标记", isOn: $model.cropMarks)
                 Spacer()
-                Button("保存排版 PDF…") { model.export(printSheet: true) }.disabled(!model.canExport || printCount == 0)
+                Button("保存排版 PDF…") { model.export(printSheet: true) }.disabled(!model.canExportPrint)
             }
-            Text("每页 \(printCount) 张 · 5 mm 页边距 · 2 mm 间距。打印 PDF 时选择“实际大小 / 100%”，关闭适应纸张，保证毫米尺寸。")
+            Text("每页 \(printCount) 张 · 至少 5 mm 页边距 · 2 mm 间距。打印 PDF 时选择“实际大小 / 100%”，关闭适应纸张，保证毫米尺寸。")
                 .font(.caption).foregroundStyle(AppColors.textSecondary)
+            printSheetPreview
             if model.isExporting { ProgressView("正在保存…").controlSize(.small) }
         }
         .padding(20).background(AppColors.cardBackground, in: RoundedRectangle(cornerRadius: 14))
         .disabled(model.isExporting)
         .onChange(of: model.settings.format) { _, format in if format == .png { model.settings.limitSize = false } }
+    }
+    private var printSheetPreview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("打印排版预览", systemImage: "doc.richtext").font(.headline)
+                Spacer()
+                if let preview = model.currentPrintPreview {
+                    Button { enlargedPrintPreview = preview } label: { Label("放大预览", systemImage: "arrow.up.left.and.arrow.down.right") }
+                }
+            }
+            ZStack {
+                RoundedRectangle(cornerRadius: 10).fill(AppColors.textSecondary.opacity(0.08))
+                if let preview = model.currentPrintPreview {
+                    printPage(preview.image).padding(24)
+                } else if model.isPrintPreviewRendering || model.isRendering || model.isLoading {
+                    VStack(spacing: 12) { ProgressView(); Text("正在更新打印排版…").font(.caption) }
+                } else if let error = model.printPreviewError {
+                    VStack(spacing: 12) {
+                        Label(error, systemImage: "exclamationmark.triangle").multilineTextAlignment(.center)
+                        Button("重新生成排版") { model.refreshPrintPreview() }
+                    }.padding(24).foregroundStyle(AppColors.textSecondary)
+                } else {
+                    Text("生成照片后，这里显示整页打印排版").foregroundStyle(AppColors.textSecondary)
+                }
+            }.frame(height: 420)
+            Text("纸张 \(mmText(model.paper.millimeters)) mm · 照片 \(mmText(model.settings.millimeters)) mm · 整页缩放显示，排版与保存的 PDF 一致")
+                .font(.caption).foregroundStyle(AppColors.textSecondary)
+        }
+    }
+    private func printPage(_ image: CGImage) -> some View {
+        Image(decorative: image, scale: 1).resizable().interpolation(.high).scaledToFit()
+            .shadow(color: .black.opacity(0.16), radius: 6, y: 3)
+            .accessibilityLabel("整页证件照打印排版")
+    }
+    private func mmText(_ size: CGSize) -> String {
+        String(format: "%g × %g", size.width, size.height)
     }
     private var printCount: Int { (try? IDPhotoService.layout(photoMM: model.settings.millimeters, paper: model.paper).count) ?? 0 }
 }

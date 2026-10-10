@@ -149,6 +149,91 @@ final class IDPhotoTests: XCTestCase {
             XCTAssertNotNil(page.thumbnail(of: CGSize(width: 600, height: 600), for: .mediaBox).tiffRepresentation)
         }
     }
+    func testPrintPreviewRendersSavedPDFWithCorrectPaperAndPhotoOrientation() async throws {
+        let settings = IDPhotoSettings(), source = image()
+        let result = try await IDPhotoWorker().render(asset: IDPhotoAsset(id: UUID(), image: source, faces: [],
+            originalSize: CGSize(width: 700, height: 900), faceDetectionFailed: false), settings: settings)
+        for paper in IDPhotoPaper.allCases {
+            let preview = try IDPhotoService.printPreview(result: result, paper: paper, cropMarks: true)
+            if let directory = ProcessInfo.processInfo.environment["RUITU_IDPHOTO_PRINT_QA_OUTPUT"] {
+                let folder = URL(fileURLWithPath: directory)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let name = paper == .sixInch ? "six-inch" : "a4"
+                try ImageCodec.encode(preview.image, type: .png, quality: 1).write(to: folder.appendingPathComponent(name + ".png"))
+                try preview.data.write(to: folder.appendingPathComponent(name + ".pdf"))
+            }
+            XCTAssertEqual(preview.photoCount, paper == .sixInch ? 10 : 49)
+            XCTAssertEqual(Double(preview.image.width) / Double(preview.image.height),
+                           paper.millimeters.width / paper.millimeters.height, accuracy: 0.001)
+            let page = try XCTUnwrap(PDFDocument(data: preview.data)?.page(at: 0))
+            XCTAssertEqual(page.bounds(for: .mediaBox).width, paper.millimeters.width * 72 / 25.4, accuracy: 0.01)
+            let pixels = bytes(preview.image)
+            // 页角为白色；从纸张物理坐标定位首张照片，确保非空且上下没有翻转。
+            XCTAssertGreaterThan(pixels[0], 250); XCTAssertGreaterThan(pixels[1], 250); XCTAssertGreaterThan(pixels[2], 250)
+            let first = try XCTUnwrap(IDPhotoService.layout(photoMM: settings.millimeters, paper: paper).first)
+            func pixel(_ y: Double) -> ArraySlice<UInt8> {
+                let x = Int(first.midX / paper.millimeters.width * Double(preview.image.width))
+                let row = preview.image.height - 1 - Int(y / paper.millimeters.height * Double(preview.image.height))
+                let offset = (row * preview.image.width + x) * 4
+                return pixels[offset..<(offset + 3)]
+            }
+            let lower = Array(pixel(first.minY + first.height * 0.2))
+            let upper = Array(pixel(first.minY + first.height * 0.8))
+            XCTAssertGreaterThan(lower[0], 220); XCTAssertLessThan(lower[2], 30)
+            XCTAssertGreaterThan(upper[2], 220); XCTAssertLessThan(upper[0], 30)
+            let noMarks = try IDPhotoService.printPreview(result: result, paper: paper, cropMarks: false)
+            XCTAssertNotEqual(pixels, bytes(noMarks.image), "裁切标记应体现在整页预览中")
+        }
+    }
+    @MainActor func testPrintPreviewLatestPaperMarksPhotoAndClearStayConsistent() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("print-source.png")
+        try ImageCodec.encode(image(), type: .png, quality: 1).write(to: url)
+        let model = IDPhotoViewModel(); model.load(url)
+        for _ in 0..<200 where model.busy { try await Task.sleep(for: .milliseconds(40)) }
+        XCTAssertTrue(model.canExportPrint)
+        let first = try XCTUnwrap(model.currentPrintPreview)
+        XCTAssertEqual(first.photoCount, 10)
+        model.paper = .a4
+        XCTAssertNil(model.currentPrintPreview); XCTAssertFalse(model.canExportPrint)
+        XCTAssertTrue(model.canExport, "纸张预览不应阻止单张照片导出")
+        model.cropMarks = false; model.paper = .sixInch; model.paper = .a4
+        for _ in 0..<200 where model.busy { try await Task.sleep(for: .milliseconds(40)) }
+        let latest = try XCTUnwrap(model.currentPrintPreview)
+        XCTAssertEqual(latest.paper, .a4); XCTAssertFalse(latest.cropMarks); XCTAssertEqual(latest.photoCount, 49)
+        XCTAssertTrue(model.canExportPrint)
+        model.settings.preset = .two; model.refresh()
+        XCTAssertNil(model.currentPrintPreview); XCTAssertFalse(model.canExportPrint)
+        for _ in 0..<200 where model.busy { try await Task.sleep(for: .milliseconds(40)) }
+        XCTAssertEqual(model.currentPrintPreview?.settings.preset, .two)
+        model.paper = .sixInch; model.clear()
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertNil(model.printPreview); XCTAssertNil(model.printPreviewError); XCTAssertFalse(model.busy)
+        XCTAssertFalse(model.canExportPrint)
+        model.load(url); model.cancel()
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertNil(model.printPreview); XCTAssertFalse(model.busy)
+    }
+    @MainActor func testOversizedPrintLayoutExplainsFailureWithoutBlockingSinglePhoto() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("large.png")
+        try ImageCodec.encode(image(), type: .png, quality: 1).write(to: url)
+        let model = IDPhotoViewModel()
+        model.settings.preset = .custom; model.settings.widthMM = 100; model.settings.heightMM = 100
+        model.settings.dpi = 150
+        model.load(url)
+        for _ in 0..<200 where model.busy { try await Task.sleep(for: .milliseconds(40)) }
+        XCTAssertTrue(model.canExport); XCTAssertFalse(model.canExportPrint)
+        XCTAssertTrue(model.printPreviewError?.contains("放不进") == true)
+        model.paper = .a4
+        XCTAssertNil(model.printPreviewError)
+        for _ in 0..<200 where model.busy { try await Task.sleep(for: .milliseconds(40)) }
+        XCTAssertTrue(model.canExportPrint); XCTAssertEqual(model.currentPrintPreview?.photoCount, 2)
+    }
     func testEXIFAndQuarterTurnAreAppliedBeforeCrop() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

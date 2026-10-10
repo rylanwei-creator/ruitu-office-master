@@ -13,6 +13,7 @@ struct ToolCatalogEntry: Identifiable {
 }
 enum ToolCatalog {
     static let tools: [ToolCatalogEntry] = [
+        .init(item: .fileOrganizer, description: "按类型分类文件，预览路径、复制或移动及撤销", keywords: "文件夹 整理 归类 目录 folder organize"),
         .init(item: .fileRename, description: "添加前缀/后缀、查找替换、序号命名", keywords: "重命名 批量 文件名 rename"),
         .init(item: .imageProcessing, description: "压缩图片、调整尺寸与转换格式", keywords: "照片 缩小 大小 jpg png heic image"),
         .init(item: .formatConversion, description: "批量转换图片格式，保留透明区域", keywords: "jpg jpeg png heic bmp tiff webp"),

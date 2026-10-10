@@ -20,6 +20,16 @@ struct IDPhotoResult: Sendable {
     let cropRect: CGRect
 }
 
+/// 预览栅格来自同一份待导出的 PDF，屏幕缩放不改变打印尺寸。
+struct IDPhotoPrintPreview: Sendable {
+    let data: Data
+    let image: CGImage
+    let settings: IDPhotoSettings
+    let paper: IDPhotoPaper
+    let cropMarks: Bool
+    let photoCount: Int
+}
+
 /// 串行处理与遮罩缓存，拖动裁切或切换底色不重复运行人像分割。
 actor IDPhotoWorker {
     static let shared = IDPhotoWorker()
@@ -218,6 +228,36 @@ enum IDPhotoService {
             }
         }
     }
+    static func printPreview(result: IDPhotoResult, paper: IDPhotoPaper, cropMarks: Bool) throws -> IDPhotoPrintPreview {
+        try Task.checkCancellation()
+        let positions = try layout(photoMM: result.settings.millimeters, paper: paper)
+        let data = try printPDF(result: result, paper: paper, cropMarks: cropMarks)
+        guard let provider = CGDataProvider(data: data as CFData),
+              let document = CGPDFDocument(provider), let page = document.page(at: 1) else {
+            throw IDPhotoError.message("无法读取打印排版预览，请重新生成。")
+        }
+        let bounds = page.getBoxRect(.mediaBox)
+        // 固定最长边 1800 px，足够放大查看且不随 600 DPI 排版无限增加内存。
+        let scale = 1800 / max(bounds.width, bounds.height)
+        let width = Int((bounds.width * scale).rounded()), height = Int((bounds.height * scale).rounded())
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            throw IDPhotoError.message("无法生成打印排版预览，请重试。")
+        }
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        // 本服务生成的页面原点为零、无旋转；显式按 MediaBox 缩放到整张栅格。
+        context.scaleBy(x: CGFloat(width) / bounds.width, y: CGFloat(height) / bounds.height)
+        context.translateBy(x: -bounds.minX, y: -bounds.minY)
+        try Task.checkCancellation()
+        context.drawPDFPage(page)
+        try Task.checkCancellation()
+        guard let image = context.makeImage() else { throw IDPhotoError.message("无法生成打印排版预览，请重试。") }
+        return IDPhotoPrintPreview(data: data, image: image, settings: result.settings, paper: paper,
+                                   cropMarks: cropMarks, photoCount: positions.count)
+    }
+
     static func printPDF(result: IDPhotoResult, paper: IDPhotoPaper, cropMarks: Bool) throws -> Data {
         let positions = try layout(photoMM: result.settings.millimeters, paper: paper)
         let pointsPerMM = 72.0 / 25.4
