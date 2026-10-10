@@ -24,6 +24,11 @@
 
 本版为 PDF 拆分增加总页数、翻页与放大预览、页码跳转和范围校验提示。点击输出范围可预览其第一页；当前页是否在范围内、预计生成文件数及输出页数均可查看。
 
+## 更新测试图
+<img width="2240" height="1520" alt="28d41e52c6eb4fcb247a517388416cd0" src="https://github.com/user-attachments/assets/784ebf8e-6e70-4ae2-af79-d0580ec8d184" />
+<img width="2238" height="1520" alt="8d5888314cbd1c89bb48075bcdb7a258" src="https://github.com/user-attachments/assets/f84326df-a501-4680-b6e3-34f93ba94a5a" />
+
+
 
 ## 目录
 
@@ -33,7 +38,6 @@
 | `Sources/RuiTuOfficeMaster/macOS` | macOS 界面、应用入口和图标资源 |
 | `Tests` | 核心功能回归测试 |
 | `scripts/build-app.sh` | 构建通用应用和 ZIP 成品 |
-| `scripts/build-icon.sh` | 从圆角 AppIcon.png 生成 macOS 应用图标 |
 | `scripts/test.sh` | 执行回归测试 |
 | `docs` | 当前使用说明、验收记录、功能边界及开发历史 |
 | `release` | 当前成品，仅保留最新版本 |
