@@ -207,6 +207,63 @@ final class OrganizerTests: XCTestCase, @unchecked Sendable {
         while vm.busy && ContinuousClock.now < deadline { try await Task.sleep(for:.milliseconds(10)) }
         XCTAssertFalse(vm.busy)
     }
+    @MainActor func testDeleteSelectedRecordPreservesFilesAndOtherUndoAfterRestart() async throws {
+        let source = try file("a.txt", "keep")
+        let first = try FileOrganizerService.execute(FileOrganizerService.preview(config()), store: store)
+        let second = try FileOrganizerService.execute(FileOrganizerService.preview(config()), store: store)
+        let vm = FileOrganizerViewModel(store: store)
+        await vm.loadRecords(); vm.selectRecord(first.id)
+        await vm.deleteRecord(first.id)
+        XCTAssertEqual(vm.records.map(\.id), [second.id]); XCTAssertEqual(vm.journal?.id, second.id)
+        XCTAssertNil(vm.errorMessage); XCTAssertNotNil(vm.statusMessage); XCTAssertTrue(vm.canUndo)
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "keep")
+        for record in [first, second] { XCTAssertEqual(try String(contentsOf: record.items[0].destination, encoding: .utf8), "keep") }
+        let restarted = FileOrganizerViewModel(store: store); await restarted.loadRecords()
+        XCTAssertEqual(restarted.records.map(\.id), [second.id]); XCTAssertTrue(restarted.canUndo)
+        restarted.undo(); try await ready(restarted)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.items[0].destination.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.items[0].destination.path))
+    }
+    @MainActor func testDeletingLastMoveRecordClearsResultWithoutRestoringOrDeletingFiles() async throws {
+        let source = try file("a.txt", "keep")
+        let record = try FileOrganizerService.execute(FileOrganizerService.preview(config(mode: .move)), store: store)
+        let vm = FileOrganizerViewModel(store: store); await vm.loadRecords()
+        await vm.deleteRecord(record.id)
+        XCTAssertTrue(vm.records.isEmpty); XCTAssertNil(vm.journal); XCTAssertFalse(vm.canUndo)
+        XCTAssertFalse(vm.busy); XCTAssertFalse(vm.canDeleteRecord)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try String(contentsOf: record.items[0].destination, encoding: .utf8), "keep")
+        let restarted = FileOrganizerViewModel(store: store); await restarted.loadRecords()
+        XCTAssertTrue(restarted.records.isEmpty); XCTAssertNil(restarted.journal)
+    }
+    @MainActor func testFailedRecordDeletionKeepsSelectionAndReportsError() async throws {
+        try file("a.txt", "keep")
+        let record = try FileOrganizerService.execute(FileOrganizerService.preview(config()), store: store)
+        let vm = FileOrganizerViewModel(store: store); await vm.loadRecords()
+        // Simulate an unavailable journal directory; a failed delete must retain the visible result.
+        let logDirectory = store.directory
+        try FileManager.default.moveItem(at: logDirectory, to: directory.appendingPathComponent("retained-logs"))
+        try Data("blocked".utf8).write(to: logDirectory)
+        await vm.deleteRecord(record.id)
+        XCTAssertEqual(vm.journal?.id, record.id); XCTAssertEqual(vm.records.map(\.id), [record.id])
+        XCTAssertNotNil(vm.errorMessage); XCTAssertNil(vm.statusMessage); XCTAssertFalse(vm.busy)
+        XCTAssertEqual(try String(contentsOf: record.items[0].destination, encoding: .utf8), "keep")
+    }
+    @MainActor func testDeletingVisibleRecordRefillsFromOlderPersistedRecords() async throws {
+        let base = Date()
+        var journals: [OrganizerJournal] = []
+        for i in 0..<21 {
+            let record = OrganizerJournal(id: UUID(), date: base.addingTimeInterval(Double(i)), configuration: config(), items: [])
+            try store.save(record)
+            try FileManager.default.setAttributes([.modificationDate: record.date], ofItemAtPath: store.directory.appendingPathComponent(record.id.uuidString + ".json").path)
+            journals.append(record)
+        }
+        let vm = FileOrganizerViewModel(store: store); await vm.loadRecords()
+        XCTAssertEqual(vm.records.count, 20); XCTAssertFalse(vm.records.contains { $0.id == journals[0].id })
+        await vm.deleteRecord(journals[20].id)
+        XCTAssertEqual(vm.records.count, 20); XCTAssertTrue(vm.records.contains { $0.id == journals[0].id })
+        XCTAssertFalse(vm.records.contains { $0.id == journals[20].id })
+    }
     @MainActor func testViewModelSettingsResultsUndoAndRestart() async throws {
         try file("a.txt","keep");let vm=FileOrganizerViewModel(store:store)
         vm.addRoots([root]);XCTAssertEqual(vm.mode,.copy);XCTAssertFalse(vm.canExecute)

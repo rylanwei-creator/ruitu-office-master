@@ -3,15 +3,11 @@ import SwiftUI
 
 /// 关于 — 版本信息、检查更新、版权声明
 struct AboutSettingsView: View {
-    private let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
-    private let buildNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "2"
+    private let model = AppUpdateViewModel.shared
+    private var appVersion: String { model.currentVersion }
+    private var buildNumber: String { model.buildNumber }
     private let developer = "锐途工作室"
     private let copyright = "Copyright © 2026 锐途工作室. All rights reserved."
-    private let updateURL = "https://github.com/rylanwei-creator/ruitu-office-master/releases/latest"
-
-    @State private var isCheckingUpdate = false
-    @State private var updateToast: UpdateToast?
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
@@ -48,50 +44,8 @@ struct AboutSettingsView: View {
                     }
                 }
 
-                // 检查更新
-                SettingsSection(title: "更新") {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("软件更新")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(AppColors.textPrimary)
-                            Text("当前版本 \(appVersion) (Build \(buildNumber))")
-                                .font(.system(size: 12))
-                                .foregroundColor(AppColors.textSecondary)
-                        }
-
-                        Spacer()
-
-                        Button {
-                            checkForUpdate()
-                        } label: {
-                            HStack(spacing: 6) {
-                                if isCheckingUpdate {
-                                    ProgressView()
-                                        .scaleEffect(0.7)
-                                        .frame(width: 16, height: 16)
-                                } else {
-                                    Image(systemName: "arrow.triangle.2.circlepath")
-                                }
-                                Text("查看发布页")
-                            }
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(AppColors.primary)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(AppColors.primary.opacity(0.5), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isCheckingUpdate)
-                    }
-
-                    Text("点击“查看发布页”，在浏览器中查看 GitHub 最新版本与下载")
-                        .font(.system(size: 11))
-                        .foregroundColor(AppColors.textSecondary.opacity(0.7))
-                        .padding(.top, 4)
+                SettingsSection(title: "更新与官网") {
+                    SoftwareUpdateView()
                 }
 
                 // 开发者
@@ -114,44 +68,6 @@ struct AboutSettingsView: View {
                 }
             }
         }
-        .overlay(alignment: .top) {
-            if let toast = updateToast {
-                ResultToastView(toast: toast)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .padding(.top, 8)
-            }
-        }
-        .animation(.easeInOut(duration: 0.3), value: updateToast)
-    }
-
-    // MARK: - 检查更新
-
-    private func checkForUpdate() {
-        isCheckingUpdate = true
-        updateToast = nil
-
-        // 交给默认浏览器打开 GitHub 最新发布页。
-        guard let url = URL(string: updateURL) else {
-            isCheckingUpdate = false
-            showUpdateToast(.failure, "更新地址配置错误")
-            return
-        }
-
-        let opened = NSWorkspace.shared.open(url)
-        isCheckingUpdate = false
-        if opened {
-            showUpdateToast(.success, "已打开 GitHub 最新发布页")
-        } else {
-            showUpdateToast(.failure, "无法打开浏览器，请稍后重试")
-        }
-    }
-
-    private func showUpdateToast(_ type: UpdateToastType, _ text: String) {
-        updateToast = UpdateToast(type: type, message: text)
-        Task {
-            try? await Task.sleep(for: .seconds(3))
-            updateToast = nil
-        }
     }
 }
 
@@ -171,56 +87,6 @@ private struct InfoRow: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(AppColors.textPrimary)
             Spacer()
-        }
-    }
-}
-
-// MARK: - 更新提示
-
-private enum UpdateToastType {
-    case success, failure, info
-}
-
-private struct UpdateToast: Equatable {
-    let type: UpdateToastType
-    let message: String
-
-    static func == (lhs: UpdateToast, rhs: UpdateToast) -> Bool {
-        lhs.type == rhs.type && lhs.message == rhs.message
-    }
-}
-
-private struct ResultToastView: View {
-    let toast: UpdateToast
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundColor(color)
-            Text(toast.message)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(AppColors.textPrimary)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(AppColors.cardBackground)
-        .cornerRadius(8)
-        .shadow(color: .black.opacity(0.1), radius: 12, y: 4)
-    }
-
-    private var icon: String {
-        switch toast.type {
-        case .success: return "checkmark.circle.fill"
-        case .failure: return "xmark.circle.fill"
-        case .info: return "info.circle.fill"
-        }
-    }
-
-    private var color: Color {
-        switch toast.type {
-        case .success: return AppColors.success
-        case .failure: return AppColors.error
-        case .info: return AppColors.primary
         }
     }
 }

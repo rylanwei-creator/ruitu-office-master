@@ -6,6 +6,8 @@ struct FileOrganizerView: View {
     @State private var dropTargeted = false
     @State private var confirmMove = false
     @State private var confirmUndo = false
+    @State private var confirmDeleteRecord = false
+    @State private var recordToDelete: OrganizerJournal?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -14,11 +16,22 @@ struct FileOrganizerView: View {
                 settingsSection
                 HStack(spacing: 14) {
                     Button("生成整理预览") { model.preview() }.buttonStyle(.borderedProminent).disabled(model.busy || model.roots.isEmpty || model.destination == nil)
-                    if model.busy { ProgressView().controlSize(.small); Text(model.isScanning ? "扫描中：\(model.scanned) 个项目" : (model.isUndoing ? "撤销中" : "整理中：\(model.completed) 项") + (model.currentName.isEmpty ? "" : " · \(model.currentName)")); Button("停止") { model.cancel() } }
+                    if model.busy {
+                        ProgressView().controlSize(.small)
+                        Text(model.isDeletingRecord ? "正在删除记录…" : model.isScanning ? "扫描中：\(model.scanned) 个项目" : (model.isUndoing ? "撤销中" : "整理中：\(model.completed) 项") + (model.currentName.isEmpty ? "" : " · \(model.currentName)"))
+                        if !model.isDeletingRecord { Button("停止") { model.cancel() } }
+                    }
                 }
                 if let plan = model.plan { previewSection(plan) }
                 CleanupMessages(error: model.errorMessage, status: model.statusMessage)
                 if let journal = model.journal { resultSection(journal) }
+                else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("整理记录与结果").font(.title3.bold())
+                        Text("暂无整理记录").foregroundStyle(AppColors.textSecondary)
+                    }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(AppColors.cardBackground, in: RoundedRectangle(cornerRadius: 14))
+                }
                 Text("按扩展名分为图片、文档、视频、音频、压缩包、代码和其他。默认复制会额外占用存储空间；移动会改变文件路径。停止会保留已完成项，单个文件复制期间可能需要等待。撤销只操作内容与身份校验一致的文件，不覆盖原位置已有文件；空文件夹保留。")
                     .font(.callout).foregroundStyle(AppColors.textSecondary)
                 PrivacyNoticeView()
@@ -34,6 +47,12 @@ struct FileOrganizerView: View {
             Button("取消", role: .cancel) {}
             Button("核对文件并撤销") { model.undo() }
         } message: { Text("复制模式移除本次生成且未变化的副本；移动模式恢复原路径。文件已变化或原位置被占用时会保留文件并说明原因。") }
+        .alert("删除这条整理记录？", isPresented: $confirmDeleteRecord, presenting: recordToDelete) { record in
+            Button("取消", role: .cancel) {}
+            Button("删除记录", role: .destructive) { Task { await model.deleteRecord(record.id) } }
+        } message: { record in
+            Text("\(record.date.formatted(date: .abbreviated, time: .shortened)) · \(record.configuration.mode.rawValue) · \(record.items.count) 个文件\n\n仅删除这条记录，原文件和整理后的文件均保留。删除后不能再通过这条记录撤销整理。")
+        }
     }
     private var sourceSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -73,11 +92,16 @@ struct FileOrganizerView: View {
     }
     private func resultSection(_ journal: OrganizerJournal) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text("整理记录与结果").font(.title3.bold()); Spacer(); Button("打开整理文件夹") { model.revealDestination() }; Button("撤销这次整理") { confirmUndo = true }.disabled(!model.canUndo) }
+            HStack { Text("整理记录与结果").font(.title3.bold()); Spacer(); Button("打开整理文件夹") { model.revealDestination() }.disabled(model.busy); Button("撤销这次整理") { confirmUndo = true }.disabled(!model.canUndo) }
             if !model.records.isEmpty {
-                Picker("查看记录（最近 20 次）", selection: Binding(get: { journal.id }, set: { model.selectRecord($0) })) {
-                    ForEach(model.records) { record in Text("\(record.date.formatted(date: .abbreviated, time: .shortened)) · \(record.configuration.mode.rawValue) · \(record.items.count) 个文件").tag(record.id) }
-                }.disabled(model.busy)
+                HStack {
+                    Picker("查看记录（最近 20 次）", selection: Binding(get: { journal.id }, set: { model.selectRecord($0) })) {
+                        ForEach(model.records) { record in Text("\(record.date.formatted(date: .abbreviated, time: .shortened)) · \(record.configuration.mode.rawValue) · \(record.items.count) 个文件").tag(record.id) }
+                    }.disabled(model.busy)
+                    Button(role: .destructive) { recordToDelete = journal; confirmDeleteRecord = true } label: {
+                        Label("删除这条记录", systemImage: "trash")
+                    }.disabled(!model.canDeleteRecord)
+                }
             }
             Text("\(journal.configuration.mode.rawValue)至 \(journal.configuration.destination.path)").font(.callout).textSelection(.enabled)
             Text(journal.summary).font(.headline)

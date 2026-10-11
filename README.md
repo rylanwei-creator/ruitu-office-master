@@ -1,18 +1,16 @@
-# 锐途办公大师 1.5.2
+# 锐途办公大师 1.5.4
 
 面向 macOS 14 及以上的本地办公工具。本版先完善基础处理流程，没有接入 DeepSeek 或其他大模型服务。
 
+[访问官网](https://rylanwei-creator.github.io/ruitu-office-master/) · [最新版发布页](https://github.com/rylanwei-creator/ruitu-office-master/releases/latest)
+
 ## 直接使用
 
-从 [GitHub 发布页](https://github.com/rylanwei-creator/ruitu-office-master/releases/tag/v1.5.2) 下载 `RuituOfficeMaster_1.5.2_macOS.zip` 并解压，将应用复制到“应用程序”文件夹后打开。
-
-[访问官网](https://rylanwei-creator.github.io/ruitu-office-master/) · [下载 1.5.2 安装包](https://github.com/rylanwei-creator/ruitu-office-master/releases/download/v1.5.2/RuituOfficeMaster_1.5.2_macOS.zip)
-
-成品包含 Apple Silicon（arm64）和 Intel（x86_64）两个架构。
+从 [GitHub 下载 1.5.4 安装包](https://github.com/rylanwei-creator/ruitu-office-master/releases/download/v1.5.4/RuituOfficeMaster_1.5.4_macOS.zip)，解压后将应用复制到“应用程序”文件夹后打开。成品包含 Apple Silicon（arm64）和 Intel（x86_64）两个架构。
 
 图片、PDF、视频等转换完成后，点击“保存到…”导出。处理结果暂存于应用缓存，原文件保持原样；批量改名会直接改动原文件名，执行前请检查预览，可使用“撤销上次改名”。重复导出自动加编号，不覆盖目录中的已有文件。
 
-这是本机生成的 ad-hoc 签名版本，未使用 Apple Developer ID 签名或 Apple 公证。尚未完成正式签名、公证及其他设备全面验收。请保留系统安全设置，按 macOS 提示检查应用来源。
+这是本机生成的 ad-hoc 签名版本，未使用 Apple Developer ID 签名或 Apple 公证。尚未完成其他设备的全面验收；请保留系统安全设置，按 macOS 提示检查应用来源。
 
 本版新增图片批处理任务中心、后台文件夹导入、取消/重试、首页搜索与收藏，并加强改名预览及撤销校验。此前的证件照功能保留：常用与自定义规格、本机人像换底、裁切构图、实际大小预览、JPG 大小上限，以及 6 寸/A4 打印排版 PDF。操作与边界详见 `docs/使用说明.md`。
 
@@ -34,6 +32,12 @@
 
 证件照打印新增整页排版预览和放大查看：选择纸张、照片规格或裁切标记后自动更新；保存的 PDF 与预览使用同一份排版。
 
+## 更新测试图
+<img width="2240" height="1520" alt="28d41e52c6eb4fcb247a517388416cd0" src="https://github.com/user-attachments/assets/784ebf8e-6e70-4ae2-af79-d0580ec8d184" />
+<img width="2238" height="1520" alt="8d5888314cbd1c89bb48075bcdb7a258" src="https://github.com/user-attachments/assets/f84326df-a501-4680-b6e3-34f93ba94a5a" />
+
+
+
 ## 目录
 
 | 路径 | 内容 |
@@ -45,8 +49,7 @@
 | `scripts/build-icon.sh` | 从圆角 AppIcon.png 生成 macOS 应用图标 |
 | `scripts/test.sh` | 执行回归测试 |
 | `docs` | 当前使用说明、验收记录、功能边界及开发历史 |
-| `release` | 构建生成的成品，不纳入源码仓库；安装包通过 GitHub Releases 提供 |
-| `backups` | 本机保留的 1.2.0 备份，不上传源码仓库 |
+| GitHub Releases | 各公开版本的安装包与校验文件 |
 
 ## 从源码构建
 
@@ -66,6 +69,10 @@ RUITU_BUILD_CURRENT_ARCH_ONLY=1 ./scripts/build-app.sh
 构建缓存放在 `.build`，可通过 `RUITU_BUILD_ROOT` 指定其他目录。受限制的构建环境若不支持 SwiftPM 的嵌套 sandbox，可设置 `RUITU_DISABLE_SWIFTPM_SANDBOX=1`；普通本机构建不需要设置。
 
 详细操作见 `docs/使用说明.md`，验证范围见 `docs/验收记录.md`，适用范围见 `docs/功能边界.md`。
+
+文件整理结果提供“删除这条记录”，清理当前选中的本机日志，保留原文件和整理后的文件；该记录的撤销入口同时移除。
+
+侧栏底部和设置 → 关于均提供“检查更新”，联网查询 GitHub 正式发布版并比较版本；显示发现新版本、已是最新正式发布版或当前版本较新。关于页增加“访问官网”，保留发布说明与下载入口。不自动安装更新。
 
 ## 更新测试图
 <img width="2240" height="1520" alt="28d41e52c6eb4fcb247a517388416cd0" src="https://github.com/user-attachments/assets/784ebf8e-6e70-4ae2-af79-d0580ec8d184" />

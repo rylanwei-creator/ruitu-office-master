@@ -16,6 +16,7 @@ final class FileOrganizerViewModel {
     private(set) var busy = false { didSet { ProcessingActivity.setActive(busy, owner: ObjectIdentifier(self)) } }
     private(set) var isScanning = false
     private(set) var isUndoing = false
+    private(set) var isDeletingRecord = false
     private(set) var scanned = 0
     private(set) var completed = 0
     private(set) var currentName = ""
@@ -29,6 +30,7 @@ final class FileOrganizerViewModel {
     }
     var canExecute: Bool { !busy && plan?.actionable.isEmpty == false && plan?.configuration == configuration }
     var canUndo: Bool { !busy && (journal?.undoableCount ?? 0) > 0 }
+    var canDeleteRecord: Bool { !busy && journal != nil }
     func invalidate() { guard !busy else { return }; plan = nil; errorMessage = nil; statusMessage = nil }
     func addRoots(_ urls: [URL]) {
         guard !busy else { return }
@@ -76,6 +78,27 @@ final class FileOrganizerViewModel {
     func removeExclusion(_ url: URL) { guard !busy else { return }; excluded.removeAll { $0 == url }; invalidate() }
     func clear() { guard !busy else { return }; roots = []; destination = nil; excluded = []; invalidate() }
     func selectRecord(_ id: UUID) { guard !busy else { return }; journal = records.first { $0.id == id }; statusMessage = nil; errorMessage = nil }
+    func deleteRecord(_ id: UUID) async {
+        guard !busy, journal?.id == id else { return }
+        let store = store
+        busy = true; isDeletingRecord = true; errorMessage = nil; statusMessage = nil
+        defer { busy = false; isDeletingRecord = false }
+        do {
+            try await Task.detached { try store.deleteRecord(id) }.value
+        } catch {
+            errorMessage = "删除整理记录失败：\(error.localizedDescription)"
+            return
+        }
+        records.removeAll { $0.id == id }
+        journal = records.first
+        statusMessage = "整理记录已删除，原文件和整理后的文件均保留。"
+        do {
+            records = try await Task.detached { try store.recent() }.value
+            journal = records.first
+        } catch {
+            errorMessage = "记录已删除，但其余记录读取失败：\(error.localizedDescription)"
+        }
+    }
     func loadRecords() async {
         guard !busy else { return }; let store = store
         do {

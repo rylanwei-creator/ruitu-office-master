@@ -3,4 +3,6 @@
 .swiftpm/
 release/
 *.dmg
+
+# Local source backups are not published
 backups/

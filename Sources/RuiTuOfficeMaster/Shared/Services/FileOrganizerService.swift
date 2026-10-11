@@ -12,6 +12,10 @@ struct OrganizerJournalStore: Sendable {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try JSONEncoder().encode(journal).write(to: directory.appendingPathComponent(journal.id.uuidString + ".json"), options: .atomic)
     }
+    func deleteRecord(_ id: UUID) throws {
+        // Only the selected journal is removed; source and output paths are never used here.
+        try FileManager.default.removeItem(at: directory.appendingPathComponent(id.uuidString + ".json"))
+    }
     func recent() throws -> [OrganizerJournal] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
         let urls = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])
