@@ -3,9 +3,12 @@ const $=(s,r=document)=>r.querySelector(s);const $$=(s,r=document)=>[...r.queryS
 const icons={folder:'<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M3 8h18M8 13h8m-8 4h5"/>',rename:'<path d="m4 16-1 5 5-1L20 8l-4-4L4 16Z"/><path d="m14 6 4 4M13 20h8"/>',image:'<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 16 5-5 4 4 4-6 5 7"/>',cutout:'<path stroke-dasharray="3 3" d="M3 9V3h6m6 0h6v6m0 6v6h-6m-6 0H3v-6"/><path d="M8 17v-2a4 4 0 0 1 8 0v2M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>',repair:'<path d="m14 3 7 7-9 11H5l-4-4L14 3Z"/><path d="m6 12 7 7m-1 2h10"/>',id:'<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="12" cy="9" r="3"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/>',pdf:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Z"/><path d="M14 2v6h6M8 12h8m-8 4h5"/>',convert:'<path d="M3 7h16l-4-4M21 17H5l4 4"/><path d="M19 7v5M5 17v-5"/>',video:'<rect x="3" y="5" width="13" height="14" rx="3"/><path d="m16 10 5-4v12l-5-4"/>',audio:'<path d="M3 10v4m4-7v10m5-14v18m5-14v10m4-7v4"/>',ocr:'<path d="M3 8V3h5m8 0h5v5m0 8v5h-5m-8 0H3v-5M7 8h10m-10 4h10m-10 4h7"/>',tasks:'<rect x="5" y="4" width="14" height="18" rx="2"/><rect x="9" y="2" width="6" height="4" rx="1"/><path d="m8 11 1 1 2-2m2 1h3m-8 6h8"/>'};
 function icon(name){return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]||icons.image}</svg>`}
 const tools=[
+{id:'rito',name:'Rito AI',cat:'AI',desc:'双模式对话，规划并确认本机办公任务。',keywords:'AI Qwen DeepSeek 豆包 千问 模型 聊天 附件',steps:['选择本地模型或配置自己的云端 API。','描述任务并添加附件，按需补充要求。','核对参数与执行预览，确认后由本机工具处理。'],boundary:'本地模型需首次下载；云端需自行配置接口与密钥。网页展示的是交互演示。'},
+{id:'collage',name:'图片拼图',cat:'图像',desc:'布局拼图，或横向、纵向长图拼接。',keywords:'拼图 长图 模板 横向 纵向 布局 滤镜 文字',steps:['选择多张图片并调整顺序。','选择布局、比例、间距、背景、滤镜和文字。','核对预览，导出 PNG 或 JPG。'],boundary:'桌面普通拼图支持 1–12 张静态图片；Rito 拼图任务支持 2–8 张。'},
+
 {id:'folder',name:'文件整理',cat:'文件',desc:'按类型归类，预览目标目录，再复制或移动。',keywords:'文件夹 分类 归档 复制 移动',steps:['添加源文件夹，选择是否包含子文件夹。','设置目标位置及复制 / 移动方式。','生成目录树预览，检查分类、同名编号后执行。'],boundary:'按扩展名分为七类，默认复制。移动改变路径；撤销需校验，文件发生变化时可能无法恢复。'},
 {id:'rename',name:'批量改名',cat:'文件',desc:'前缀、后缀、查找替换和序号命名。',keywords:'重命名 名称 序号',steps:['选择文件，设置改名规则。','核对原文件名与新文件名预览。','执行并查看逐项结果，需要时撤销上次操作。'],boundary:'直接修改原文件名。执行与撤销前会校验文件状态，不提供跨崩溃的完整事务恢复。'},
-{id:'image',name:'图片处理',cat:'图像',desc:'压缩、调整尺寸，批量输出常用格式。',keywords:'压缩 尺寸 JPG PNG HEIC 大小',steps:['导入图片或图片文件夹。','选择质量、尺寸模式和输出格式，查看预估。','批量处理，核对实际结果并保存到目标位置。'],boundary:'转换与重编码可能增加体积。输出为 8-bit sRGB，特殊色彩和原始元数据不保证保留。'},
+{id:'image',name:'图片处理',cat:'图像',desc:'压缩、调整尺寸，批量输出常用格式。',keywords:'压缩 尺寸 JPG PNG HEIC 大小',steps:['导入图片或图片文件夹。','选择轻度、均衡、强力，或自定义目标体积范围，核对尺寸和输出格式。','批量处理，核对实际结果并保存到目标位置。'],boundary:'目标体积压缩以减少约 30%、50%、75% 或自定义范围为目标；受原图和编码限制，必要时可允许等比缩小。'},
 {id:'cutout',name:'自动抠图',cat:'图像',desc:'提取前景主体，预览透明背景并导出 PNG。',keywords:'背景 透明 主体 PNG',steps:['导入一张静态图片。','运行自动抠图，在原图与结果间检查边缘。','必要时框选清除残留背景，保存透明 PNG。'],boundary:'自动提取系统识别到的前景。复杂背景与透明物体需要检查；目前没有画笔涂选或逐主体选择。'},
 {id:'repair',name:'图片去水印',cat:'图像',desc:'框选局部区域，用周边或取样背景修补。',keywords:'修补 去除 取样 水印',steps:['导入图片，在预览中框选需要修补的区域。','选择周边插值，或从干净背景取样并调整羽化。','检查效果，可撤销或恢复原图，再另存输出。'],boundary:'适合简单背景，无法保证恢复被水印遮住的真实细节。处理自己的图片或已获授权的素材。'},
 {id:'id',name:'证件照',cat:'图像',desc:'尺寸、换底、构图，以及整页打印排版。',keywords:'一寸 二寸 蓝底 白底 红底 A4 打印 相纸',steps:['导入人像，选择常用或自定义证件照规格。','调整构图和底色，检查发丝、眼镜及衣服边缘。','保存单张照片，或选择纸张预览并导出排版 PDF。'],boundary:'预设规格不代表满足所有机构的审核要求。打印时选择“实际大小 / 100%”，排版物理成品仍需核对。'},
@@ -15,7 +18,7 @@ const tools=[
 {id:'video',name:'视频压缩',cat:'音视频',desc:'调整输出参数，重新编码日常视频素材。',keywords:'MP4 码率 分辨率 质量',steps:['选择本地视频文件。','设置输出参数并开始处理。','检查成品画质、文件大小与播放效果后保存。'],boundary:'重新编码不保证体积一定变小。HDR、多轨、字幕及全部元数据不保证保留；没有视频去水印或链接下载功能。'},
 {id:'audio',name:'音视频转换',cat:'音视频',desc:'常用媒体转换，配合系统本机语音能力。',keywords:'音频 MP3 M4A WAV 提取 语音 字幕',steps:['选择媒体文件和当前可用的转换方式。','配置输出参数，开始本机处理。','查看结果并导出，再核对播放或文字内容。'],boundary:'编解码与语音能力依赖系统和设备，受保护或罕见编码可能不支持。语音语言模型可能需要下载。'},
 {id:'tasks',name:'任务中心',cat:'文件',desc:'查看图片批处理队列、进度及处理结果。',keywords:'重试 取消 批量 历史 进度 队列',steps:['从图片处理或格式转换开始批量任务。','进入任务中心查看等待、执行和逐文件结果。','按需要停止、重试未完成项，保存成功结果。'],boundary:'目前覆盖图片处理及图片格式转换；不包括所有工具，也不提供跨重启续传或真正暂停。'}];
-let filter='全部',query='';const categories=['全部','文件','图像','文档','音视频'];
+let filter='全部',query='';const categories=['全部','AI','文件','图像','文档','音视频'];
 $('#filters').innerHTML=categories.map(c=>`<button class="filter ${c===filter?'active':''}" data-cat="${c}" aria-pressed="${c===filter}">${c}</button>`).join('');
 function renderTools(){const shown=tools.filter(t=>(filter==='全部'||t.cat===filter)&&`${t.name}${t.desc}${t.keywords}`.toLowerCase().includes(query));$('#tool-grid').innerHTML=shown.map(t=>`<button class="tool-card" data-tool="${t.id}" aria-label="查看${t.name}操作指南">${icon(t.id)}<h3>${t.name}</h3><p>${t.desc}</p><span>${t.cat}工具 <b>↗</b></span></button>`).join('');$('#empty-search').hidden=!!shown.length}
 renderTools();$('#filters').addEventListener('click',e=>{const b=e.target.closest('[data-cat]');if(!b)return;filter=b.dataset.cat;$$('[data-cat]').forEach(n=>{n.classList.toggle('active',n===b);n.setAttribute('aria-pressed',n===b)});renderTools()});$('#tool-search').addEventListener('input',e=>{query=e.target.value.trim().toLowerCase();renderTools()});
@@ -44,3 +47,23 @@ $('#image-file').addEventListener('change',e=>chooseFile(e.target.files[0]));con
 function settingsChanged(){clearResult();const png=$('#output-format').value==='image/png',webp=$('#output-format').value==='image/webp';$('#quality').disabled=png;$('#quality-value').textContent=png?'无损':$('#quality').value+'%';$('#format-hint').textContent=png?'PNG 保留透明背景，质量滑块不适用，体积可能比原图大。':webp?'WebP 支持透明背景，实际输出以浏览器编码能力为准。':'JPG 不支持透明背景，透明区域会填充为白色。';if(selectedFile)$('#lab-status').textContent='参数已更新，请重新处理以生成当前设置的结果。'}
 $('#quality').addEventListener('input',settingsChanged);$('#output-format').addEventListener('change',settingsChanged);
 $('#compress').addEventListener('click',async()=>{if(!selectedFile||busy)return;clearResult();const revision=inputRevision,file=selectedFile,mime=$('#output-format').value,q=Number($('#quality').value)/100;busy=true;$('#compress').disabled=true;$('#compress').textContent='处理中…';$('#lab-status').textContent='正在浏览器本地处理…';let image=null;try{image=await createImageBitmap(file,{imageOrientation:'from-image'});if(image.width*image.height>36000000||image.width>16000||image.height>16000)throw new Error('图片尺寸过大，请使用桌面软件处理。');const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const ctx=canvas.getContext('2d');if(!ctx)throw new Error('当前浏览器无法创建图片画布。');if(mime==='image/jpeg'){ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height)}ctx.drawImage(image,0,0);const blob=await new Promise(resolve=>canvas.toBlob(resolve,mime,q));if(!blob)throw new Error('图片编码失败，请尝试其他输出格式。');if(blob.type!==mime)throw new Error('当前浏览器不支持所选格式，请改用 JPG 或 PNG。');if(revision!==inputRevision||selectedFile!==file)return;resultURL=URL.createObjectURL(blob);$('#lab-preview').src=resultURL;$('#lab-filename').textContent=file.name;const change=(1-blob.size/file.size)*100;$('#lab-size').textContent=`${sizeLabel(file.size)} → ${sizeLabel(blob.size)} · ${change>=0?'减少 '+change.toFixed(1)+'%':'增加 '+(-change).toFixed(1)+'%'} · ${canvas.width} × ${canvas.height} px`;$('#lab-download').href=resultURL;$('#lab-download').download=file.name.replace(/\.[^.]+$/,'')+'_锐途.'+({'image/jpeg':'jpg','image/webp':'webp','image/png':'png'}[mime]);$('#lab-result').hidden=false;$('#lab-status').textContent=change>=0?'处理完成。检查预览后下载结果。':'处理完成，但体积增加了。可降低质量或选择另一种格式；原图未修改。'}catch(error){if(revision===inputRevision)$('#lab-status').textContent=error.message||'处理失败，请尝试其他图片。'}finally{image?.close();busy=false;$('#compress').disabled=!selectedFile;$('#compress').innerHTML='处理图片 <span>→</span>'}});
+
+
+const ritoExamples={
+compress:{name:'图片体积压缩',files:'示例照片.jpg',fields:'减少比例：50% · 输出格式：JPG · 允许等比缩小：是'},
+pdf:{name:'PDF 合并',files:'项目方案.pdf、会议资料.pdf',fields:'附件顺序：项目方案 → 会议资料 · 原文件保留'},
+collage:{name:'图片拼图',files:'示例照片 1.jpg、示例照片 2.jpg',fields:'拼接方式：纵向长图 · 图片间距：12 px · 输出格式：PNG'}
+};
+function showRitoExample(key){
+ const item=ritoExamples[key];
+ document.querySelector('#rito-demo').innerHTML='<div class="rito-reply"><img src="assets/rito-mascot.png" alt="" width="44" height="44"><p>我已经准备好'+item.name+'方案，请核对参数并生成预览。</p></div><div class="demo-card"><strong>'+item.name+' · 示例任务</strong><p class="demo-note">'+item.files+'</p><details open><summary>本次参数</summary><p>'+item.fields+'</p></details><div class="demo-footer"><span id="rito-progress">尚未执行文件操作</span><button class="button dark small" id="rito-confirm">生成执行预览 →</button></div></div>';
+ let step=0;
+ document.querySelector('#rito-confirm').addEventListener('click',e=>{
+  step++;
+  document.querySelector('#rito-progress').textContent=step===1?'示例预览已就绪，请确认':'演示完成 · 桌面软件会在本机生成真实结果';
+  e.currentTarget.textContent=step===1?'确认示例任务 →':'演示完成 ✓';
+  e.currentTarget.disabled=step>1;
+ });
+}
+document.querySelectorAll('[data-rito]').forEach(b=>b.addEventListener('click',()=>showRitoExample(b.dataset.rito)));
+showRitoExample('compress');
