@@ -2,16 +2,19 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-// PNG 使用无损编码；这些档位只调整 JPG、HEIC 等有损输出的质量。
+// 档位以原文件字节数为目标；编码质量与缩减比例是两个不同参数。
 enum CompressionLevel: String, CaseIterable, Sendable {
     case light = "轻度压缩", balanced = "均衡压缩", strong = "强力压缩", custom = "自定义"
     var description: String {
-        switch self { case .light: return "画质优先"; case .balanced: return "推荐"; case .strong: return "体积优先"; case .custom: return "手动调整" }
+        switch self { case .light: return "目标减少 30%"; case .balanced: return "目标减少 50%"; case .strong: return "目标减少 75%"; case .custom: return "指定体积范围" }
     }
     var qualityValue: Double {
-        switch self { case .light: return 0.92; case .balanced: return 0.72; case .strong: return 0.42; case .custom: return 0.75 }
+        switch self { case .light: return 0.60; case .balanced: return 0.45; case .strong: return 0.30; case .custom: return 0.30 }
     }
-    var expectedReduction: String { "不保证固定缩减比例" }
+    var reductionFraction: Double {
+        switch self { case .light: 0.30; case .balanced: 0.50; case .strong: 0.75; case .custom: 0 }
+    }
+    var expectedReduction: String { description }
 }
 
 enum SizeMode: String, CaseIterable, Sendable {
@@ -36,9 +39,16 @@ enum OutputFormat: String, CaseIterable, Sendable {
 @MainActor @Observable
 final class ImageCompressionViewModel {
     var selectedImages: [URL] = []
-    var compressionLevel: CompressionLevel = .balanced
-    var quality: Double = 0.72 { didSet { if oldValue != quality { invalidateResults() } } }
+    var compressionLevel: CompressionLevel = .balanced { didSet { if oldValue != compressionLevel { invalidateResults() } } }
+    var quality: Double = 0.30 { didSet { if oldValue != quality { invalidateResults() } } }
     var showCustomSlider = false
+    var customMinimum = "200" { didSet { if oldValue != customMinimum { invalidateResults(); refreshEstimates() } } }
+    var customMaximum = "500" { didSet { if oldValue != customMaximum { invalidateResults(); refreshEstimates() } } }
+    var customSizeUnit = "KB" { didSet { if oldValue != customSizeUnit { invalidateResults(); refreshEstimates() } } }
+    var allowTargetResize = true { didSet { if oldValue != allowTargetResize { invalidateResults(); refreshEstimates() } } }
+    var estimateDetails: [URL: String] = [:]
+    private var preparedImages: [URL: PreparedTargetImage] = [:]
+    @ObservationIgnored private var previewDirectory: URL?
     var sizeMode: SizeMode = .aspectRatio { didSet { if oldValue != sizeMode { invalidateResults(); refreshEstimates() } } }
     var maxDimension: CGFloat = 2048 { didSet { if oldValue != maxDimension { invalidateResults() } } }
     var customWidth = "" { didSet { if oldValue != customWidth { invalidateResults() } } }
@@ -58,14 +68,18 @@ final class ImageCompressionViewModel {
     var results: [CompressionResult] = []
     var successMessage: String?
     var errorMessage: String?
-    private var estimationTask: Task<Void, Never>?
-    private var importTask: Task<Void, Never>?
+    @ObservationIgnored private var estimationTask: Task<Void, Never>?
+    @ObservationIgnored private var importTask: Task<Void, Never>?
     private(set) var taskID: UUID?
     private let taskManager: FileTaskManager
     private var importedDimensions: [URL: CGSize] = [:]
     private var importedTypes: [URL: String] = [:]
     init(taskManager: FileTaskManager = .shared) { self.taskManager = taskManager }
-    deinit { ProcessingActivity.setActive(false, owner: ObjectIdentifier(self)) }
+    deinit {
+        estimationTask?.cancel(); importTask?.cancel()
+        if let previewDirectory { try? FileManager.default.removeItem(at: previewDirectory) }
+        ProcessingActivity.setActive(false, owner: ObjectIdentifier(self))
+    }
     var messageColor: Color {
         if errorMessage != nil { return results.isEmpty ? AppColors.error : .orange }
         if let taskID, taskManager.record(taskID)?.state == .cancelled { return .orange }
@@ -75,6 +89,27 @@ final class ImageCompressionViewModel {
     var canRetry: Bool { taskID.map { taskManager.canRetry($0) } ?? false }
     private var estimateID = UUID()
 
+    var sizeGoal: ImageSizeGoal? {
+        if compressionLevel != .custom { return .reduction(compressionLevel.reductionFraction) }
+        let multiplier = customSizeUnit == "MB" ? 1_000_000.0 : 1_000.0
+        guard let low = Double(customMinimum), let high = Double(customMaximum),
+              low.isFinite, high.isFinite, low > 0, low <= high,
+              high * multiplier <= 1_000_000_000, low * multiplier >= 1 else { return nil }
+        return .range(minimum: Int64((low * multiplier).rounded(.up)), maximum: Int64((high * multiplier).rounded(.down)))
+    }
+    private var targetOptions: ImageTargetOptions? {
+        guard let goal = sizeGoal else { return nil }
+        return .init(goal: goal, format: outputFormat, qualityFloor: effectiveQuality,
+                     maxDimension: effectiveMaxDimension, targetSize: customSize,
+                     fitWithin: boundingSize, allowResize: allowTargetResize)
+    }
+    var estimateWarnings: String? {
+        let lines = selectedImages.compactMap { url -> String? in
+            guard let prepared = preparedImages[url], !prepared.targetMet else { return nil }
+            return url.lastPathComponent + "：" + prepared.detail
+        }
+        return lines.isEmpty ? nil : lines.prefix(4).joined(separator: "\n") + (lines.count > 4 ? "\n另有 \(lines.count - 4) 张未达到目标" : "")
+    }
     var effectiveQuality: Double { compressionLevel == .custom ? quality : compressionLevel.qualityValue }
     var effectiveMaxDimension: CGFloat? { sizeMode == .maxDimension ? maxDimension : nil }
     private var customSize: CGSize? {
@@ -120,7 +155,8 @@ final class ImageCompressionViewModel {
     }
     var qualityPercent: Int { Int(effectiveQuality * 100) }
     var validationMessage: String? {
-        guard effectiveQuality.isFinite, (0...1).contains(effectiveQuality) else { return CompressionError.invalidQuality.localizedDescription }
+        guard effectiveQuality.isFinite, (0.05...1).contains(effectiveQuality) else { return CompressionError.invalidQuality.localizedDescription }
+        guard sizeGoal != nil else { return TargetCompressionError.invalidRange.localizedDescription }
         let svc = ImageCompressionService()
         for url in selectedImages {
             do {
@@ -133,11 +169,12 @@ final class ImageCompressionViewModel {
         }
         return nil
     }
-    var canExecute: Bool { !selectedImages.isEmpty && !isProcessing && !isImporting && !isSaving && validationMessage == nil }
+    var canExecute: Bool { !selectedImages.isEmpty && !isProcessing && !isImporting && !isSaving && !isEstimating && validationMessage == nil }
     var hasLargeFiles: Bool { originalSizes.values.contains { $0 > 50_000_000 } }
     var largeFileWarning: String? { hasLargeFiles ? "包含超过 50MB 的图片，处理可能需要较长时间" : nil }
     var smallFileNote: String? {
-        outputFormat == .png ? "PNG 不减少颜色层次。仅重新编码可能不会变小；缩小尺寸或选择 JPG 可进一步减小体积。" : "转换格式或调整尺寸后，文件可能变大。结果会保留你选择的质量，不会擅自降级。"
+        "每张图片单独计算目标。试编码和导出使用同一文件，输出不大于原图；目标无法满足时会说明原因。" +
+        (allowTargetResize ? "允许为体积目标等比缩小尺寸，实际像素见结果。" : "尺寸固定，仅在最低质量以上搜索编码参数。")
     }
 
     func selectCompressionLevel(_ level: CompressionLevel) {
@@ -183,7 +220,7 @@ final class ImageCompressionViewModel {
     func moveImages(from source: IndexSet, to destination: Int) {
         guard !isProcessing, !isImporting, !isSaving else { return }
         selectedImages.move(fromOffsets: source, toOffset: destination)
-        invalidateResults()
+        invalidateResults(); refreshEstimates()
     }
     func addImages(from urls: [URL]) {
         guard !isProcessing, !isImporting, !isSaving else { return }
@@ -225,57 +262,76 @@ final class ImageCompressionViewModel {
         selectedImages = []; originalSizes = [:]; importedDimensions = [:]; importedTypes = [:]
         invalidateResults(); refreshEstimates()
     }
-    private func invalidateResults() { taskID = nil; results = []; successMessage = nil; errorMessage = nil; progress = 0 }
+    private func invalidateResults() {
+        taskID = nil; results = []; successMessage = nil; errorMessage = nil; progress = 0
+        estimationTask?.cancel(); estimateID = UUID(); isEstimating = false
+        estimatedSizes = [:]; estimateDetails = [:]; preparedImages = [:]
+        if let previewDirectory { try? FileManager.default.removeItem(at: previewDirectory) }
+        previewDirectory = nil
+    }
     func refreshEstimates() {
         estimationTask?.cancel()
-        estimatedSizes = [:]
+        estimatedSizes = [:]; estimateDetails = [:]; preparedImages = [:]
+        if let previewDirectory { try? FileManager.default.removeItem(at: previewDirectory) }
+        previewDirectory = nil
         isEstimating = false; estimationFailed = false
         let id = UUID(); estimateID = id
         guard !selectedImages.isEmpty, !isProcessing, !isImporting else { return }
-        guard validationMessage == nil else { estimationFailed = true; return }
+        guard validationMessage == nil, let options = targetOptions else { estimationFailed = true; return }
         isEstimating = true
-        let urls = selectedImages, q = effectiveQuality, fmt = outputFormat
-        let maxDim = effectiveMaxDimension, target = customSize, box = boundingSize
+        let urls = selectedImages
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ruitu-size-preview-" + id.uuidString)
+        previewDirectory = directory
         estimationTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
             let worker = Task.detached(priority: .utility) {
-                var values: [URL: Int64] = [:]
+                var values: [URL: PreparedTargetImage] = [:], failures: [URL: String] = [:]
                 for url in urls {
                     if Task.isCancelled { break }
                     do {
-                        values[url] = try await ImageCompressionWorker.shared.estimate(url: url, quality: q,
-                            maxDimension: maxDim, outputFormat: fmt, targetSize: target, fitWithin: box)
+                        values[url] = try await ImageCompressionWorker.shared.prepareTarget(url: url, options: options, directory: directory)
                     } catch {
                         if Task.isCancelled { break }
-                        values[url] = 0
+                        failures[url] = error.localizedDescription
                     }
                 }
-                return values
+                return (values, failures)
             }
-            let values = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
-            guard !Task.isCancelled, self?.estimateID == id else { return }
-            self?.estimatedSizes = values
+            let (values, failures) = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard !Task.isCancelled, self?.estimateID == id else {
+                try? FileManager.default.removeItem(at: directory); return
+            }
+            self?.preparedImages = values
+            for (url, prepared) in values { self?.originalSizes[url] = prepared.originalSize }
+            self?.estimatedSizes = Dictionary(uniqueKeysWithValues: urls.map { ($0, values[$0]?.byteCount ?? 0) })
+            self?.estimateDetails = values.mapValues(\.detail).merging(failures) { _, new in new }
             self?.isEstimating = false
-            self?.estimationFailed = values.values.contains(0)
+            self?.estimationFailed = !failures.isEmpty
         }
     }
+
     func executeCompression() {
         guard canExecute else { errorMessage = validationMessage; return }
         estimationTask?.cancel()
         estimateID = UUID(); isEstimating = false
         results = []; successMessage = nil; errorMessage = nil
-        let q = effectiveQuality, fmt = outputFormat
-        let maxDim = effectiveMaxDimension, target = customSize, box = boundingSize
-        let settings = "\(compressionLevel.rawValue) · 质量 \(Int(q * 100))% · \(fmt.rawValue) · \(sizeMode.rawValue)" +
-            (maxDim.map { " \(String(format: "%.0f", Double($0)))px" } ?? "") + (target.map { " \(Int($0.width))×\(Int($0.height))px" } ?? "") + (box.map { " \(Int($0.width))×\(Int($0.height))px" } ?? "")
+        guard let options = targetOptions else { errorMessage = TargetCompressionError.invalidRange.localizedDescription; return }
+        let fmt = outputFormat, previews = preparedImages
+        let settings = "\(compressionLevel.rawValue) · \(compressionLevel == .custom ? customMinimum + "–" + customMaximum + " " + customSizeUnit : compressionLevel.description) · \(fmt.rawValue) · \(sizeMode.rawValue)" + (allowTargetResize ? " · 允许等比缩小" : " · 固定尺寸")
         let id = taskManager.enqueue(tool: "图片处理", configuration: settings, sources: selectedImages) { url in
             let type = try ImageCompressionService().outputType(for: fmt, originalURL: url)
             let dir = try CacheManager.makeTaskDirectory(in: CacheManager.imageCacheDirectory)
             let destination = dir.appendingPathComponent(url.deletingPathExtension().lastPathComponent + "_处理." + (type.preferredFilenameExtension ?? "png"))
             do {
-                try await ImageCompressionWorker.shared.compress(url: url, quality: q, maxDimension: maxDim,
-                    outputFormat: fmt, outputURL: destination, targetSize: target, fitWithin: box)
-                return FileTaskOutput(url: destination, inputSize: FileUtils.fileSize(of: url), outputSize: FileUtils.fileSize(of: destination))
+                let prepared: PreparedTargetImage
+                if let preview = previews[url], FileManager.default.fileExists(atPath: preview.url.path) {
+                    prepared = preview
+                } else {
+                    prepared = try await ImageCompressionWorker.shared.prepareTarget(url: url, options: options, directory: dir)
+                }
+                try await ImageCompressionWorker.shared.exportTarget(url: url, prepared: prepared, outputURL: destination)
+                if prepared.url.deletingLastPathComponent() == dir { try? FileManager.default.removeItem(at: prepared.url) }
+                return FileTaskOutput(url: destination, inputSize: prepared.originalSize, outputSize: prepared.byteCount, detail: prepared.detail)
             } catch { try? FileManager.default.removeItem(at: dir); throw error }
         } onChange: { [weak self] record in
             guard self?.taskID == record.id else { return }
@@ -289,10 +345,10 @@ final class ImageCompressionViewModel {
         currentFileName = record.cancellationRequested && record.state.isActive ? "正在停止，当前图片编码结束后退出…" : record.currentFile
         results = record.files.compactMap { item in
             guard item.state == .completed, let output = item.output else { return nil }
-            return CompressionResult(originalURL: item.source, compressedURL: output.url, originalSize: output.inputSize, compressedSize: output.outputSize)
+            return CompressionResult(originalURL: item.source, compressedURL: output.url, originalSize: output.inputSize, compressedSize: output.outputSize, detail: output.detail)
         }
         guard !record.state.isActive else { return }
-        for result in results { originalSizes[result.originalURL] = result.originalSize; estimatedSizes[result.originalURL] = result.compressedSize }
+        for result in results { originalSizes[result.originalURL] = result.originalSize; estimatedSizes[result.originalURL] = result.compressedSize; estimateDetails[result.originalURL] = result.detail }
         estimationFailed = !hasCompleteEstimate && record.failed > 0
         successMessage = record.summary
         errorMessage = record.files.compactMap { item in item.error.map { "\(item.source.lastPathComponent)：\($0)" } }.joined(separator: "\n")

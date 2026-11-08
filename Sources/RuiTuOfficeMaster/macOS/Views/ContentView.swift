@@ -4,57 +4,97 @@ import SwiftUI
 /// 主布局 — 侧边栏 + 内容区（所有页面保活，切换不丢失状态）
 struct ContentView: View {
     @State private var selectedNav: NavItem = .home
+    @State private var showingAI = false
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var ai = RToolAIViewModel(responder: RitoAIConfiguration.shared.makeProvider(), historyStore: .local())
+
+    private var sidebarSelection: Binding<NavItem> {
+        Binding(get: { selectedNav }, set: { item in
+            selectedNav = item
+            showingAI = false
+        })
+    }
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(selectedNav: $selectedNav)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            ZStack {
+                SidebarView(selectedNav: sidebarSelection, onSelectTool: { showingAI = false })
+                    .pageVisible(!showingAI)
+                RitoAIHistoryView(model: ai, returnToTools: { showingAI = false })
+                    .pageVisible(showingAI)
+            }
                 .navigationSplitViewColumnWidth(220)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    RitoModeSwitch(showingAI: $showingAI)
+                        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
+                        .background(AppColors.sidebarBackground)
+                }
         } detail: {
             ZStack {
-                HomeView(selectedNav: $selectedNav)
-                    .pageVisible(selectedNav == .home)
+                ZStack {
+                    HomeView(selectedNav: $selectedNav)
+                        .pageVisible(selectedNav == .home)
 
-                FileOrganizerView()
-                    .pageVisible(selectedNav == .fileOrganizer)
+                    FileOrganizerView()
+                        .pageVisible(selectedNav == .fileOrganizer)
 
-                FileRenameView()
-                    .pageVisible(selectedNav == .fileRename)
+                    FileRenameView()
+                        .pageVisible(selectedNav == .fileRename)
 
-                ImageProcessingView()
-                    .pageVisible(selectedNav == .imageProcessing)
+                    ImageProcessingView()
+                        .pageVisible(selectedNav == .imageProcessing)
 
-                ImageCleanupView(tool: .cutout)
-                    .pageVisible(selectedNav == .cutout)
+                    CollageView()
+                        .pageVisible(selectedNav == .collage)
 
-                ImageCleanupView(tool: .watermark)
-                    .pageVisible(selectedNav == .imageWatermark)
+                    ImageCleanupView(tool: .cutout)
+                        .pageVisible(selectedNav == .cutout)
 
-                IDPhotoView()
-                    .pageVisible(selectedNav == .idPhoto)
+                    ImageCleanupView(tool: .watermark)
+                        .pageVisible(selectedNav == .imageWatermark)
 
-                PDFToolsView()
-                    .pageVisible(selectedNav == .pdfTools)
+                    IDPhotoView()
+                        .pageVisible(selectedNav == .idPhoto)
 
-                FormatConversionView()
-                    .pageVisible(selectedNav == .formatConversion)
+                    PDFToolsView()
+                        .pageVisible(selectedNav == .pdfTools)
 
-                VideoCompressionView()
-                    .pageVisible(selectedNav == .videoCompression)
+                    FormatConversionView()
+                        .pageVisible(selectedNav == .formatConversion)
 
-                MediaConversionView()
-                    .pageVisible(selectedNav == .mediaConversion)
+                    VideoCompressionView()
+                        .pageVisible(selectedNav == .videoCompression)
 
-                OCRView()
-                    .pageVisible(selectedNav == .ocr)
+                    MediaConversionView()
+                        .pageVisible(selectedNav == .mediaConversion)
 
-                TaskCenterView()
-                    .pageVisible(selectedNav == .tasks)
+                    OCRView()
+                        .pageVisible(selectedNav == .ocr)
 
-                HistoryView()
-                    .pageVisible(selectedNav == .history)
+                    TaskCenterView()
+                        .pageVisible(selectedNav == .tasks)
 
-                SettingsView()
-                    .pageVisible(selectedNav == .settings)
+                    HistoryView()
+                        .pageVisible(selectedNav == .history)
+
+                    SettingsView()
+                        .pageVisible(selectedNav == .settings)
+                }
+                .pageVisible(!showingAI)
+
+                RToolAIView(model: ai, isVisible: showingAI)
+                .pageVisible(showingAI)
+            }
+        }
+        .onChange(of: RitoAIConfiguration.shared.revision) { _, _ in ai.updateResponder(RitoAIConfiguration.shared.makeProvider()) }
+        .onChange(of: showingAI) { _, visible in
+            if !visible { ai.stop(); Task { await RitoLocalEngine.shared.unload() } }
+        }
+        .toolbar {
+            if columnVisibility == .detailOnly {
+                ToolbarItem(placement: .navigation) {
+                    RitoModeSwitch(showingAI: $showingAI).frame(width: 176)
+                }
             }
         }
     }

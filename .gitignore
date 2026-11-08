@@ -1,8 +1,4 @@
-.DS_Store
 .build/
 .swiftpm/
 release/
-*.dmg
-
-# Local source backups are not published
-backups/
+.DS_Store

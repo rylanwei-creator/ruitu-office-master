@@ -1,0 +1,36 @@
+name: Publish Ruitu 1.9.0
+on:
+  push:
+    branches: [main]
+    paths: [release-version.txt]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: ruitu-release-1.9.0
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+      - name: Build Apple Silicon app
+        run: ./scripts/build-app.sh
+      - name: Verify archive and checksum
+        run: |
+          codesign --verify --deep --strict release/锐途办公大师.app
+          unzip -tq release/RuituOfficeMaster_1.9.0_AppleSilicon.zip
+          cd release
+          shasum -a 256 RuituOfficeMaster_1.9.0_AppleSilicon.zip > RuituOfficeMaster_1.9.0_SHA256.txt
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view v1.9.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create v1.9.0 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "锐途办公大师 1.9.0" --notes-file release-notes.md --draft
+          fi
+          gh release upload v1.9.0 release/RuituOfficeMaster_1.9.0_AppleSilicon.zip release/RuituOfficeMaster_1.9.0_SHA256.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit v1.9.0 --repo "$GITHUB_REPOSITORY" --draft=false --latest

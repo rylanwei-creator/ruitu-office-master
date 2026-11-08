@@ -26,7 +26,7 @@ struct ImageProcessingView: View {
                             .font(.system(size: 28, weight: .bold))
                             .foregroundColor(AppColors.textPrimary)
                     }
-                    Text("批量调整图片尺寸与格式；压缩效果取决于图片内容及所选参数")
+                    Text("按原始体积压缩图片，试编码后显示实际大小；支持每张图片的目标体积范围")
                         .font(.system(size: 14))
                         .foregroundColor(AppColors.textSecondary)
                 }
@@ -79,7 +79,7 @@ struct ImageProcessingView: View {
             FeatureIntroItem(
                 icon: "shippingbox",
                 title: "体积压缩",
-                desc: "调节有损格式的质量；PNG 保留颜色层次，缩小尺寸可减小体积"
+                desc: "轻度减少约 30%、均衡约 50%、强力约 75%，按实际编码结果调整"
             )
             .frame(maxHeight: .infinity)
             FeatureIntroItem(
@@ -214,11 +214,27 @@ struct ImageProcessingView: View {
                     }
                 }
 
-                // 自定义质量滑块（仅自定义模式）
+                Toggle("达到体积目标时，允许等比缩小尺寸", isOn: $vm.allowTargetResize)
+                    .font(.system(size: 12))
+                Text("勾选后，尺寸设置是起始尺寸或上限；为达到目标可能继续缩小。取消勾选则保持设定尺寸。格式保持你的选择，PNG 保留透明与颜色层次。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+
+                // 自定义按每张图片的体积范围搜索，质量滑块是下限。
                 if vm.showCustomSlider {
                     VStack(alignment: .leading, spacing: 8) {
+                        Text("每张图片的目标体积范围").font(.system(size: 13, weight: .medium))
+                        HStack(spacing: 8) {
+                            TextField("最小体积", text: $vm.customMinimum).textFieldStyle(.roundedBorder).frame(width: 90).accessibilityLabel("目标最小体积")
+                            Text("至")
+                            TextField("最大体积", text: $vm.customMaximum).textFieldStyle(.roundedBorder).frame(width: 90).accessibilityLabel("目标最大体积")
+                            Picker("单位", selection: $vm.customSizeUnit) {
+                                Text("KB").tag("KB"); Text("MB").tag("MB")
+                            }.frame(width: 100)
+                        }
+                        Text("范围针对每张图片，不是批量总大小。1 KB = 1000 字节；1 MB = 1000 KB。不会为凑体积增加数据。")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
                         HStack {
-                            Text("自定义质量")
+                            Text("最低编码质量")
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundColor(AppColors.textPrimary)
                             Spacer()
@@ -234,11 +250,11 @@ struct ImageProcessingView: View {
                             }
 
                         HStack {
-                            Text("最小体积")
+                            Text("允许更低画质")
                                 .font(.system(size: 11))
                                 .foregroundColor(AppColors.textSecondary)
                             Spacer()
-                            Text("最佳质量")
+                            Text("保留更高画质")
                                 .font(.system(size: 11))
                                 .foregroundColor(AppColors.textSecondary)
                         }
@@ -277,7 +293,7 @@ struct ImageProcessingView: View {
                             .foregroundColor(AppColors.textPrimary)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("预估大小（按当前设置编码）")
+                        Text("试编码大小（与导出一致）")
                             .font(.system(size: 11))
                             .foregroundColor(AppColors.textSecondary)
                         Text(vm.estimatedSizeText)
@@ -285,7 +301,7 @@ struct ImageProcessingView: View {
                             .foregroundColor(vm.estimatedChangeColor)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("预估体积变化")
+                        Text("实际试编码变化")
                             .font(.system(size: 11))
                             .foregroundColor(AppColors.textSecondary)
                         Text(vm.estimatedChangeText)
@@ -306,7 +322,15 @@ struct ImageProcessingView: View {
                     }
                 }
 
-                Text("档位预期：\(vm.compressionLevel.expectedReduction)，实际效果取决于图片内容复杂度")
+                if let warnings = vm.estimateWarnings {
+                    Label(warnings, systemImage: "exclamationmark.triangle").font(.system(size: 11)).foregroundStyle(.orange)
+                }
+                if vm.estimationFailed {
+                    Text(vm.selectedImages.compactMap { url in
+                        vm.estimatedSizes[url] == 0 ? url.lastPathComponent + "：" + (vm.estimateDetails[url] ?? "无法试编码") : nil
+                    }.prefix(4).joined(separator: "\n")).font(.system(size: 11)).foregroundStyle(AppColors.error)
+                }
+                Text("档位目标：\(vm.compressionLevel.expectedReduction)。优先保留尺寸和画质；未达到范围会显示原因。")
                     .font(.system(size: 11))
                     .foregroundColor(AppColors.textSecondary.opacity(0.7))
             }
@@ -560,6 +584,7 @@ struct ImageProcessingView: View {
     }
 
     private func resultRow(_ result: CompressionResult) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
         HStack {
             Text(result.originalURL.lastPathComponent)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -579,6 +604,10 @@ struct ImageProcessingView: View {
                 .fontWeight(.medium)
         }
         .font(.system(size: 13))
+        if let detail = result.detail {
+            Text(detail).font(.system(size: 11)).foregroundStyle(detail.hasPrefix("达到") ? AppColors.textSecondary : .orange)
+        }
+        }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }

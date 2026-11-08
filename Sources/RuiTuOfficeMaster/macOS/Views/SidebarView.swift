@@ -4,6 +4,7 @@ import SwiftUI
 /// 侧边栏导航
 struct SidebarView: View {
     @Binding var selectedNav: NavItem
+    var onSelectTool: () -> Void = {}
     @State private var showUpdates = false
     private let updates = AppUpdateViewModel.shared
 
@@ -15,7 +16,10 @@ struct SidebarView: View {
                     Label(item.rawValue, systemImage: item.systemImage)
                         .font(.system(size: 14))
                         .padding(.vertical, 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                         .tag(item)
+                        .simultaneousGesture(TapGesture().onEnded { selectedNav = item; onSelectTool() })
                 }
             } header: {
                 Text("工具")
@@ -31,7 +35,10 @@ struct SidebarView: View {
                     Label(item.rawValue, systemImage: item.systemImage)
                         .font(.system(size: 14))
                         .padding(.vertical, 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                         .tag(item)
+                        .simultaneousGesture(TapGesture().onEnded { selectedNav = item; onSelectTool() })
                 }
             } header: {
                 Text("其他")

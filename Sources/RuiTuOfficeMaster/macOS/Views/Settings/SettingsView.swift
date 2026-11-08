@@ -8,6 +8,7 @@ enum SettingsTab: String, CaseIterable {
     case storage = "存储"
     case feedback = "反馈"
     case about = "关于"
+    case ai = "AI"
 }
 
 /// 设置主容器 — 水平标签页切换五个子页面
@@ -33,6 +34,8 @@ struct SettingsView: View {
                 FeedbackSettingsView()
             case .about:
                 AboutSettingsView()
+            case .ai:
+                RitoAISettingsView()
             }
 
             Spacer()

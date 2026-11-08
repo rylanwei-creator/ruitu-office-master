@@ -1,0 +1,1 @@
+MLX Swift LM / MLX Swift and their resolved Swift Package dependencies are bundled. License texts are retained by package name. Qwen3 model weights are not bundled; Qwen3 uses Apache License 2.0. The pinned model download includes LICENSE. Package.resolved records dependency versions. Rito AI uses no developer cloud backend.

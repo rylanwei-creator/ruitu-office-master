@@ -20,6 +20,7 @@ struct FileTaskOutput: Codable, Sendable {
     let url: URL
     let inputSize: Int64
     let outputSize: Int64
+    var detail: String? = nil
 }
 
 struct FileTaskEntry: Identifiable, Codable, Sendable {

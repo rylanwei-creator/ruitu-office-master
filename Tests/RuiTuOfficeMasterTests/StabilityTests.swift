@@ -232,7 +232,7 @@ final class StabilityTests: XCTestCase {
     }
     @MainActor func testChangingImageSettingsInvalidatesOldResultsAndRetryBinding() async throws {
         let input = try image(), vm = ImageCompressionViewModel(taskManager: FileTaskManager())
-        vm.addImages(from: [input]); vm.executeCompression()
+        vm.addImages(from: [input]); try await waitUntil { !vm.isEstimating }; vm.executeCompression()
         try await waitUntil { !vm.isProcessing }
         XCTAssertEqual(vm.results.count, 1)
         vm.outputFormat = .jpg

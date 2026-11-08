@@ -15,6 +15,7 @@ enum PDFError: LocalizedError {
     case noPages
     case invalidPageRange(String)
     case watermarkFailed
+    case passwordVerificationFailed
 
     var errorDescription: String? {
         switch self {
@@ -30,6 +31,8 @@ enum PDFError: LocalizedError {
             return "页码范围格式不正确：\(range)"
         case .watermarkFailed:
             return "添加水印失败"
+        case .passwordVerificationFailed:
+            return "系统无法验证这组 PDF 密码，未保存文件。请尝试较短的打开密码，再重新加密。"
         }
     }
 }
@@ -121,11 +124,21 @@ struct PDFService {
             throw PDFError.invalidPageRange("打开密码和权限密码不能相同")
         }
         let permissions = (config.allowPrinting ? 3 : 0) | (config.allowCopying ? 16 : 0)
-        try write(document, to: outputURL, options: [
+        let options: [PDFDocumentWriteOption:Any] = [
             .userPasswordOption: config.userPassword,
             .ownerPasswordOption: config.ownerPassword.isEmpty ? UUID().uuidString : config.ownerPassword,
             .accessPermissionsOption: NSNumber(value: permissions)
-        ])
+        ]
+        guard let data = document.dataRepresentation(options:options) else { throw PDFError.writeFailed }
+        if !config.ownerPassword.isEmpty {
+            // PDFKit can write a document whose supplied owner password does not work.
+            // Check the encoded result before committing it to the user's output directory.
+            guard let encoded = PDFDocument(data:data), encoded.isEncrypted,
+                  encoded.unlock(withPassword:config.ownerPassword), encoded.permissionsStatus == .owner else {
+                throw PDFError.passwordVerificationFailed
+            }
+        }
+        try data.write(to:outputURL,options:.atomic)
     }
     func addWatermark(url: URL, type: WatermarkType, outputURL: URL) throws {
         guard url.standardizedFileURL != outputURL.standardizedFileURL else { throw CompressionError.sameFile }

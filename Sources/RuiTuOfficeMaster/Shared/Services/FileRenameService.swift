@@ -7,7 +7,7 @@ enum RenameMode: String, CaseIterable, Sendable {
     }
 }
 /// 用文件身份、大小和修改时间识别预览/撤销期间被替换或编辑的文件。
-struct RenameFileVersion: Sendable, Equatable {
+struct RenameFileVersion: Sendable, Equatable, Codable {
     let device: UInt64
     let inode: UInt64
     let size: UInt64
@@ -28,7 +28,7 @@ struct RenamePreviewItem: Identifiable, Sendable {
     var conflictReason: String? = nil
     var sourceVersion: RenameFileVersion? = nil
 }
-struct RenameMove: Sendable {
+struct RenameMove: Sendable, Codable, Equatable {
     let original: URL
     let renamed: URL
     var version: RenameFileVersion? = nil
@@ -98,7 +98,7 @@ struct FileRenameService: Sendable {
                 newName: name, isValid: changed && reason == nil, conflictReason: reason, sourceVersion: version)
         }
     }
-    func execute(previewItems: [RenamePreviewItem], progressHandler: @escaping @Sendable (Double) -> Void) -> RenameResult {
+    func execute(previewItems: [RenamePreviewItem], shouldStop: @Sendable () -> Bool = { false }, progressHandler: @escaping @Sendable (Double) -> Void) -> RenameResult {
         let fm = FileManager.default
         let problems = previewItems.compactMap { item in item.conflictReason.map { "\(item.originalName)：\($0)" } }
         guard problems.isEmpty else { return .failure(errors: problems) }
@@ -116,6 +116,7 @@ struct FileRenameService: Sendable {
         var completed: [RenameMove] = []
         do {
             for item in items {
+                if shouldStop() { throw CancellationError() }
                 guard item.sourceVersion == nil || RenameFileVersion.read(item.originalURL) == item.sourceVersion else {
                     throw CocoaError(.fileReadUnknown)
                 }
@@ -124,6 +125,7 @@ struct FileRenameService: Sendable {
                 staged.append((item, temp))
             }
             for entry in staged {
+                if shouldStop() { throw CancellationError() }
                 let target = entry.item.originalURL.deletingLastPathComponent().appendingPathComponent(entry.item.newName)
                 try fm.moveItem(at: entry.temporary, to: target)
                 completed.append(RenameMove(original: entry.item.originalURL, renamed: target, version: RenameFileVersion.read(target)))

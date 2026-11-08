@@ -149,11 +149,11 @@ final class CoreRegressionTests: XCTestCase {
         for _ in 0..<1000 where vm.isEstimating { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(vm.hasCompleteEstimate)
         let before = vm.estimatedSizes
-        let service = ImageCompressionService()
         for input in [first, second] {
-            let expected = try service.estimateCompressedSize(url: input, quality: 0.42, maxDimension: nil,
-                outputFormat: .png, targetSize: CGSize(width: 303, height: 101))
-            XCTAssertEqual(before[input], expected)
+            let options = ImageTargetOptions(goal: .reduction(0.75), format: .png, qualityFloor: CompressionLevel.strong.qualityValue,
+                maxDimension: nil, targetSize: CGSize(width: 303, height: 101), fitWithin: nil, allowResize: true)
+            let expected = try ImageTargetCompressor().compress(input, options: options)
+            XCTAssertEqual(before[input], Int64(expected.data.count))
         }
         vm.executeCompression()
         for _ in 0..<1000 where vm.isProcessing { try await Task.sleep(for: .milliseconds(10)) }
@@ -400,6 +400,8 @@ final class CoreRegressionTests: XCTestCase {
         let second = secondDir.appendingPathComponent("same.png")
         let other = try fixture("other.png", width: 40, height: 20); try FileManager.default.copyItem(at: other, to: second)
         let vm = ImageCompressionViewModel(); vm.addImages(from: [first, second]); vm.outputFormat = .png
+        vm.allowTargetResize = false
+        for _ in 0..<1000 where vm.isEstimating { try await Task.sleep(for: .milliseconds(10)) }
         vm.executeCompression()
         for _ in 0..<500 where vm.isProcessing { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertFalse(vm.isProcessing); XCTAssertEqual(vm.results.count, 2)
@@ -410,7 +412,9 @@ final class CoreRegressionTests: XCTestCase {
     }
     @MainActor func testImageCancellationReleasesProcessingState() async throws {
         let input = try fixture()
-        let vm = ImageCompressionViewModel(); vm.addImages(from: [input]); vm.executeCompression(); vm.cancelProcessing()
+        let vm = ImageCompressionViewModel(); vm.addImages(from: [input])
+        for _ in 0..<1000 where vm.isEstimating { try await Task.sleep(for: .milliseconds(10)) }
+        vm.executeCompression(); vm.cancelProcessing()
         for _ in 0..<500 where vm.isProcessing { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertFalse(vm.isProcessing)
         XCTAssertTrue(vm.successMessage?.contains("已停止") == true)

@@ -8,6 +8,7 @@ struct CompressionResult: Sendable {
     let compressedURL: URL
     let originalSize: Int64
     let compressedSize: Int64
+    var detail: String? = nil
     var compressionRatio: Double { originalSize > 0 ? Double(compressedSize) / Double(originalSize) : 1 }
     var savedPercent: Int { Int((1 - compressionRatio) * 100) }
     var changeText: String { savedPercent >= 0 ? "减少 \(savedPercent)%" : "增加 \(-savedPercent)%" }

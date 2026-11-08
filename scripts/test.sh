@@ -8,4 +8,4 @@ if [[ "${RUITU_DISABLE_SWIFTPM_SANDBOX:-0}" == 1 ]]; then FLAGS+=(--disable-sand
 export CLANG_MODULE_CACHE_PATH="$BUILD_ROOT/clang"
 export RUITU_TEST_MODE=1
 export RUITU_WORK_DIRECTORY="$BUILD_ROOT/test-data"
-swift test "${FLAGS[@]}"
+swift test -c release --jobs 2 "${FLAGS[@]}"
