@@ -26,7 +26,7 @@ const dialog=$('#tool-dialog');$('#tool-grid').addEventListener('click',e=>{cons
 function toast(msg){$('#toast').textContent=msg;$('#toast').classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').classList.remove('show'),2600)}
 try{if(localStorage.getItem('ruitu-theme')==='dark')document.body.classList.add('dark-mode')}catch{}
 function themeLabel(){$('#theme').setAttribute('aria-label',document.body.classList.contains('dark-mode')?'切换浅色模式':'切换深色模式')};themeLabel();$('#theme').addEventListener('click',()=>{document.body.classList.toggle('dark-mode');themeLabel();try{localStorage.setItem('ruitu-theme',document.body.classList.contains('dark-mode')?'dark':'light')}catch{}});
-$('.menu-toggle').addEventListener('click',e=>{const open=$('.header nav').classList.toggle('open');e.currentTarget.setAttribute('aria-expanded',open)});$$('.header nav a').forEach(a=>a.addEventListener('click',()=>{$('.header nav').classList.remove('open');$('.menu-toggle').setAttribute('aria-expanded','false')}));document.addEventListener('keydown',e=>{if(e.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)&&!dialog.open){e.preventDefault();$('#tools').scrollIntoView();$('#tool-search').focus()}});
+$('.menu-toggle').addEventListener('click',e=>{const open=$('.header nav').classList.toggle('open');e.currentTarget.setAttribute('aria-expanded',open)});$$('.header nav a').forEach(a=>a.addEventListener('click',()=>{$('.header nav').classList.remove('open');$('.menu-toggle').setAttribute('aria-expanded','false')}));document.addEventListener('keydown',e=>{if(e.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)&&!document.querySelector('dialog[open]')){e.preventDefault();$('#tools').scrollIntoView();$('#tool-search').focus()}});
 const demos=[{id:'folder',name:'文件整理'},{id:'image',name:'图片处理'},{id:'pdf',name:'PDF 拆分'},{id:'ocr',name:'OCR 识别'},{id:'id',name:'证件照'}];let activeDemo='folder',demoTimer=null,pdfPage=1;
 $('#demo-tabs').innerHTML=demos.map((d,i)=>`<button class="demo-tab ${i===0?'active':''}" id="tab-${d.id}" data-demo="${d.id}" role="tab" aria-selected="${i===0}" aria-controls="demo-area" tabindex="${i===0?0:-1}">${icon(d.id)}${d.name}</button>`).join('');
 function demoHead(name,sub){return `<div class="demo-head"><div><h3>${name}</h3><p>${sub}</p></div><span class="badge">示例演示</span></div>`}
@@ -44,26 +44,136 @@ function sizeLabel(bytes){return bytes>=1024*1024?(bytes/1024/1024).toFixed(2)+'
 function clearResult(){inputRevision++;if(resultURL){URL.revokeObjectURL(resultURL);resultURL=null}$('#lab-result').hidden=true;$('#lab-download').removeAttribute('href')}
 function chooseFile(file){clearResult();selectedFile=null;$('#compress').disabled=true;if(!file)return;if(!['image/jpeg','image/png','image/webp'].includes(file.type)){$('#lab-status').textContent='请选择 JPG、PNG 或 WebP 图片。';return}if(file.size>20*1024*1024){$('#lab-status').textContent='图片超过 20 MB，请使用桌面软件处理。';return}selectedFile=file;$('#upload-zone strong').textContent=file.name;$('#lab-status').textContent=`已选择 ${file.name} · ${sizeLabel(file.size)}。调整设置后点击处理。`;$('#compress').disabled=busy}
 $('#image-file').addEventListener('change',e=>chooseFile(e.target.files[0]));const zone=$('#upload-zone');['dragenter','dragover'].forEach(name=>zone.addEventListener(name,e=>{e.preventDefault();zone.classList.add('dragging')}));['dragleave','drop'].forEach(name=>zone.addEventListener(name,e=>{e.preventDefault();zone.classList.remove('dragging');if(name==='drop'){if(e.dataTransfer.files.length>1){$('#lab-status').textContent='请一次选择一张图片。';return}chooseFile(e.dataTransfer.files[0])}}));
-function settingsChanged(){clearResult();const png=$('#output-format').value==='image/png',webp=$('#output-format').value==='image/webp';$('#quality').disabled=png;$('#quality-value').textContent=png?'无损':$('#quality').value+'%';$('#format-hint').textContent=png?'PNG 保留透明背景，质量滑块不适用，体积可能比原图大。':webp?'WebP 支持透明背景，实际输出以浏览器编码能力为准。':'JPG 不支持透明背景，透明区域会填充为白色。';if(selectedFile)$('#lab-status').textContent='参数已更新，请重新处理以生成当前设置的结果。'}
+function settingsChanged(){clearResult();const png=$('#output-format').value==='image/png',webp=$('#output-format').value==='image/webp';$('#quality').disabled=png;$('#quality-value').textContent=png?'无损':$('#quality').value+' / 100';$('#quality-hint').textContent=png?'PNG 使用无损编码，画质滑块不适用，文件体积不保证减小。':'这是画质参数，不是文件大小百分比。体积变化取决于图片内容与输出格式。';$('#format-hint').textContent=png?'PNG 保留透明背景，质量滑块不适用，体积可能比原图大。':webp?'WebP 支持透明背景，实际输出以浏览器编码能力为准。':'JPG 不支持透明背景，透明区域会填充为白色。';if(selectedFile)$('#lab-status').textContent='参数已更新，请重新处理以生成当前设置的结果。'}
 $('#quality').addEventListener('input',settingsChanged);$('#output-format').addEventListener('change',settingsChanged);
-$('#compress').addEventListener('click',async()=>{if(!selectedFile||busy)return;clearResult();const revision=inputRevision,file=selectedFile,mime=$('#output-format').value,q=Number($('#quality').value)/100;busy=true;$('#compress').disabled=true;$('#compress').textContent='处理中…';$('#lab-status').textContent='正在浏览器本地处理…';let image=null;try{image=await createImageBitmap(file,{imageOrientation:'from-image'});if(image.width*image.height>36000000||image.width>16000||image.height>16000)throw new Error('图片尺寸过大，请使用桌面软件处理。');const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const ctx=canvas.getContext('2d');if(!ctx)throw new Error('当前浏览器无法创建图片画布。');if(mime==='image/jpeg'){ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height)}ctx.drawImage(image,0,0);const blob=await new Promise(resolve=>canvas.toBlob(resolve,mime,q));if(!blob)throw new Error('图片编码失败，请尝试其他输出格式。');if(blob.type!==mime)throw new Error('当前浏览器不支持所选格式，请改用 JPG 或 PNG。');if(revision!==inputRevision||selectedFile!==file)return;resultURL=URL.createObjectURL(blob);$('#lab-preview').src=resultURL;$('#lab-filename').textContent=file.name;const change=(1-blob.size/file.size)*100;$('#lab-size').textContent=`${sizeLabel(file.size)} → ${sizeLabel(blob.size)} · ${change>=0?'减少 '+change.toFixed(1)+'%':'增加 '+(-change).toFixed(1)+'%'} · ${canvas.width} × ${canvas.height} px`;$('#lab-download').href=resultURL;$('#lab-download').download=file.name.replace(/\.[^.]+$/,'')+'_锐途.'+({'image/jpeg':'jpg','image/webp':'webp','image/png':'png'}[mime]);$('#lab-result').hidden=false;$('#lab-status').textContent=change>=0?'处理完成。检查预览后下载结果。':'处理完成，但体积增加了。可降低质量或选择另一种格式；原图未修改。'}catch(error){if(revision===inputRevision)$('#lab-status').textContent=error.message||'处理失败，请尝试其他图片。'}finally{image?.close();busy=false;$('#compress').disabled=!selectedFile;$('#compress').innerHTML='处理图片 <span>→</span>'}});
+$('#compress').addEventListener('click',async()=>{if(!selectedFile||busy)return;clearResult();const revision=inputRevision,file=selectedFile,mime=$('#output-format').value,q=Number($('#quality').value)/100;busy=true;$('#compress').disabled=true;$('#compress').textContent='处理中…';$('#lab-status').textContent='正在浏览器本地处理…';let image=null;try{image=await createImageBitmap(file,{imageOrientation:'from-image'});if(image.width*image.height>36000000||image.width>16000||image.height>16000)throw new Error('图片尺寸过大，请使用桌面软件处理。');const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const ctx=canvas.getContext('2d');if(!ctx)throw new Error('当前浏览器无法创建图片画布。');if(mime==='image/jpeg'){ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height)}ctx.drawImage(image,0,0);const blob=await new Promise(resolve=>canvas.toBlob(resolve,mime,q));if(!blob)throw new Error('图片编码失败，请尝试其他输出格式。');if(blob.type!==mime)throw new Error('当前浏览器不支持所选格式，请改用 JPG 或 PNG。');if(revision!==inputRevision||selectedFile!==file)return;resultURL=URL.createObjectURL(blob);$('#lab-preview').src=resultURL;const extension={'image/jpeg':'jpg','image/webp':'webp','image/png':'png'}[mime],outputName=file.name.replace(/\.[^.]+$/,'')+'_锐途.'+extension;$('#lab-filename').textContent=outputName;const change=(1-blob.size/file.size)*100;$('#lab-size').textContent=`文件体积：${sizeLabel(file.size)} → ${sizeLabel(blob.size)} · 实际${change>=0?'减少 '+change.toFixed(1)+'%':'增加 '+(-change).toFixed(1)+'%'}`;$('#lab-settings-used').textContent=`输出设置：${extension.toUpperCase()} · ${mime==='image/png'?'无损编码':'画质参数 '+Math.round(q*100)+' / 100'} · ${canvas.width} × ${canvas.height} px`;$('#lab-download').href=resultURL;$('#lab-download').download=outputName;$('#lab-result').hidden=false;$('#lab-status').textContent=change>=0?'处理完成。上方分别显示实际体积变化和画质参数，请检查预览后下载。':'处理完成，但体积增加了。可降低质量或选择另一种格式；原图未修改。'}catch(error){if(revision===inputRevision)$('#lab-status').textContent=error.message||'处理失败，请尝试其他图片。'}finally{image?.close();busy=false;$('#compress').disabled=!selectedFile;$('#compress').innerHTML='处理图片 <span>→</span>'}});
 
 
-const ritoExamples={
-compress:{name:'图片体积压缩',files:'示例照片.jpg',fields:'减少比例：50% · 输出格式：JPG · 允许等比缩小：是'},
-pdf:{name:'PDF 合并',files:'项目方案.pdf、会议资料.pdf',fields:'附件顺序：项目方案 → 会议资料 · 原文件保留'},
-collage:{name:'图片拼图',files:'示例照片 1.jpg、示例照片 2.jpg',fields:'拼接方式：纵向长图 · 图片间距：12 px · 输出格式：PNG'}
+const ritoExamples = {
+  compress: { name: '图片体积压缩', files: '示例照片.jpg', type: 'JPG · 示例附件' },
+  pdf: { name: 'PDF 合并', files: '项目方案.pdf、会议资料.pdf', type: '2 个示例附件' },
+  collage: { name: '图片拼图', files: '照片 1.jpg、照片 2.jpg', type: '2 个示例附件' }
 };
-function showRitoExample(key){
- const item=ritoExamples[key];
- document.querySelector('#rito-demo').innerHTML='<div class="rito-reply"><img src="assets/rito-mascot.png" alt="" width="44" height="44"><p>我已经准备好'+item.name+'方案，请核对参数并生成预览。</p></div><div class="demo-card"><strong>'+item.name+' · 示例任务</strong><p class="demo-note">'+item.files+'</p><details open><summary>本次参数</summary><p>'+item.fields+'</p></details><div class="demo-footer"><span id="rito-progress">尚未执行文件操作</span><button class="button dark small" id="rito-confirm">生成执行预览 →</button></div></div>';
- let step=0;
- document.querySelector('#rito-confirm').addEventListener('click',e=>{
-  step++;
-  document.querySelector('#rito-progress').textContent=step===1?'示例预览已就绪，请确认':'演示完成 · 桌面软件会在本机生成真实结果';
-  e.currentTarget.textContent=step===1?'确认示例任务 →':'演示完成 ✓';
-  e.currentTarget.disabled=step>1;
- });
+let ritoRun = 0;
+let ritoTimers = [];
+function stopRitoDemo() {
+  ritoRun++;
+  ritoTimers.forEach(clearTimeout);
+  ritoTimers = [];
 }
-document.querySelectorAll('[data-rito]').forEach(b=>b.addEventListener('click',()=>showRitoExample(b.dataset.rito)));
+function showRitoExample(key) {
+  stopRitoDemo();
+  const item = ritoExamples[key];
+  $$('[data-rito]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.rito === key)));
+  const fields = key === 'compress' ? `<label><span class="workflow-range-label">目标减少比例 <output id="workflow-quality-value">50%</output></span><input id="workflow-quality" type="range" min="30" max="80" step="5" value="50"></label><label>输出格式<select id="workflow-format"><option>JPG</option><option>PNG</option><option>HEIC</option></select></label>` : key === 'pdf' ? `<label>合并顺序<select id="workflow-order"><option value="forward">项目方案 → 会议资料</option><option value="reverse">会议资料 → 项目方案</option></select></label><label>输出文件名<input id="workflow-name" maxlength="60" value="项目合并.pdf" aria-label="示例输出文件名"></label>` : `<label>拼接方式<select id="workflow-direction"><option value="vertical">纵向长图</option><option value="horizontal">横向长图</option></select></label><label>图片间距（px）<input id="workflow-gap" type="number" min="0" max="60" step="2" value="12"></label>`;
+  $('#rito-demo').innerHTML = `<div class="rito-reply"><img src="assets/rito-mascot.png" alt="Rito" width="40" height="40"><p>我准备了一份${item.name}方案。你可以调整参数，再看看预览。</p></div><div class="workflow-card"><div class="workflow-top"><strong>${item.name}</strong><span class="workflow-status" id="workflow-state">等待预览</span></div><div class="workflow-file">${icon(key === 'pdf' ? 'pdf' : 'image')}<span>${item.files}</span><span>${item.type}</span></div><div class="workflow-fields">${fields}</div><div id="workflow-preview" class="workflow-preview" hidden></div><div class="workflow-progress" id="workflow-progress" role="progressbar" aria-label="示例任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><span></span></div><div class="demo-footer"><span class="workflow-meta" id="rito-progress">示例文件 · 保留原文件 · 不操作电脑文件</span><div class="workflow-actions"><button class="demo-button" id="rito-cancel" hidden>取消演示</button><button class="button dark small" id="rito-confirm">生成执行预览 →</button></div></div></div>`;
+  let phase = 'draft';
+  const confirm = $('#rito-confirm');
+  const preview = $('#workflow-preview');
+  const state = $('#workflow-state');
+  const progress = $('#workflow-progress');
+  const cancel = $('#rito-cancel');
+  const info = $('#rito-progress');
+  const change = () => {
+    stopRitoDemo();
+    phase = 'draft';
+    state.textContent = '参数已调整';
+    confirm.disabled = false;
+    confirm.textContent = '重新生成预览 →';
+    preview.hidden = true;
+    progress.hidden = true;
+    cancel.hidden = true;
+    info.textContent = '请重新预览，再确认示例任务';
+    if ($('#workflow-quality')) $('#workflow-quality-value').textContent = $('#workflow-quality').value + '%';
+  };
+  $$('.workflow-fields input, .workflow-fields select').forEach(input => input.addEventListener('input', change));
+  function drawPreview() {
+    preview.replaceChildren();
+    const title = document.createElement('strong');
+    title.textContent = '执行预览 · 示例';
+    const text = document.createElement('p');
+    preview.append(title, text);
+    if (key === 'compress') {
+      const reduction = Number($('#workflow-quality').value);
+      text.textContent = `目标减少 ${reduction}% 体积 · ${$('#workflow-format').value} 输出 · 原文件保留。实际体积取决于图片内容与编码，请以桌面软件结果为准。`;
+    } else if (key === 'pdf') {
+      const name = $('#workflow-name').value.trim() || '项目合并.pdf';
+      text.textContent = `输出：${name} · 按下方顺序合并 · 保留两个原 PDF。`;
+      const pages = document.createElement('div');
+      pages.className = 'preview-paper';
+      const labels = $('#workflow-order').value === 'forward' ? ['01 项目方案', '02 会议资料'] : ['01 会议资料', '02 项目方案'];
+      labels.forEach(label => { const span = document.createElement('span'); span.textContent = label; pages.append(span); });
+      preview.append(pages);
+    } else {
+      const gapField = $('#workflow-gap');
+      const gap = Math.min(60, Math.max(0, Number(gapField.value) || 0));
+      gapField.value = String(gap);
+      const vertical = $('#workflow-direction').value === 'vertical';
+      text.textContent = `${vertical ? '纵向长图' : '横向长图'} · 间距 ${gap} px · PNG 输出 · 原图片保留。下方是布局示意。`;
+      const cells = document.createElement('div');
+      cells.className = `preview-collage ${vertical ? 'vertical' : ''}`;
+      cells.style.gap = `${Math.round(gap / 3)}px`;
+      cells.append(document.createElement('span'), document.createElement('span'));
+      preview.append(cells);
+    }
+    preview.hidden = false;
+  }
+  function resetAfterCancel() {
+    stopRitoDemo();
+    phase = 'draft';
+    state.textContent = '已取消演示';
+    info.textContent = '演示已停止，可以调整参数后重新预览';
+    confirm.disabled = false;
+    confirm.textContent = '重新生成预览 →';
+    cancel.hidden = true;
+    progress.hidden = true;
+    preview.hidden = true;
+    $$('.workflow-fields input, .workflow-fields select').forEach(i => { i.disabled = false; });
+  }
+  cancel.addEventListener('click', resetAfterCancel);
+  confirm.addEventListener('click', () => {
+    if (phase === 'done') { showRitoExample(key); return; }
+    if (phase === 'draft') {
+      drawPreview();
+      phase = 'preview';
+      state.textContent = '等待确认';
+      info.textContent = '核对以上参数后，再确认示例任务';
+      confirm.textContent = '确认示例任务 →';
+      return;
+    }
+    if (phase !== 'preview') return;
+    phase = 'running';
+    const run = ++ritoRun;
+    state.textContent = '正在演示';
+    confirm.disabled = true;
+    confirm.textContent = '演示中…';
+    cancel.hidden = false;
+    progress.hidden = false;
+    progress.setAttribute('aria-valuenow', '0');
+    $('span', progress).style.width = '0%';
+    $$('.workflow-fields input, .workflow-fields select').forEach(i => { i.disabled = true; });
+    [25, 60, 100].forEach((value, index) => {
+      ritoTimers.push(setTimeout(() => {
+        if (run !== ritoRun) return;
+        $('span', progress).style.width = value + '%';
+        progress.setAttribute('aria-valuenow', String(value));
+        info.textContent = value === 25 ? '示例：读取附件' : value === 60 ? '示例：按参数处理' : '演示完成 · 网页未创建真实文件';
+        if (value === 100) {
+          phase = 'done';
+          state.textContent = '演示完成';
+          confirm.disabled = false;
+          confirm.textContent = '再试一次 ↺';
+          cancel.hidden = true;
+          const result = document.createElement('p');
+          result.className = 'workflow-result';
+          result.textContent = '✓ 在桌面软件中，这一步会生成可打开、可保存的真实结果。';
+          preview.append(result);
+          $$('.workflow-fields input, .workflow-fields select').forEach(i => { i.disabled = false; });
+        }
+      }, (index + 1) * 550));
+    });
+  });
+}
+$$('[data-rito]').forEach(b => b.addEventListener('click', () => showRitoExample(b.dataset.rito)));
+document.addEventListener('visibilitychange', () => { if (document.hidden && $('#rito-cancel') && !$('#rito-cancel').hidden) $('#rito-cancel').click(); });
 showRitoExample('compress');
